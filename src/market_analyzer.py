@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-大盘复盘分析模块
+美股市场复盘分析模块
 ===================================
 
 职责：
-1. 获取大盘指数数据（上证、深证、创业板）
+1. 获取美股主要指数数据（道琴斯、标普500、纳斯达克）
 2. 搜索市场新闻形成复盘情报
-3. 使用大模型生成每日大盘复盘报告
+3. 使用大模型生成每日美股复盘报告
 """
 
 import logging
@@ -239,11 +239,11 @@ class MarketAnalyzer:
         today = datetime.now()
         date_str = today.strftime('%Y年%m月%d日')
 
-        # 多维度搜索
+        # 美股市场搜索关键词
         search_queries = [
-            "A股 大盘 复盘",
-            "股市 行情 分析",
-            "A股 市场 热点 板块",
+            "US stock market today",
+            "Wall Street Fed interest rate",
+            "Magnificent 7 tech stocks earnings",
         ]
         
         try:
@@ -253,7 +253,7 @@ class MarketAnalyzer:
                 # 使用 search_stock_news 方法，传入"大盘"作为股票名
                 response = self.search_service.search_stock_news(
                     stock_code="market",
-                    stock_name="大盘",
+                stock_name="US Market",
                     max_results=3,
                     focus_keywords=query.split()
                 )
@@ -341,7 +341,7 @@ class MarketAnalyzer:
                 snippet = n.get('snippet', '')[:100]
             news_text += f"{i}. {title}\n   {snippet}\n"
         
-        prompt = f"""你是一位专业的A/H/美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
+        prompt = f"""你是一位专业的美股市场分析师，请根据以下数据生成一份简洁的美股复盘报告。
 
 【重要】输出要求：
 - 必须输出纯 Markdown 文本格式
@@ -380,22 +380,25 @@ class MarketAnalyzer:
 ## 📊 {overview.date} 大盘复盘
 
 ### 一、市场总结
-（2-3句话概括今日市场整体表现，包括指数涨跌、成交量变化）
+（2-3句话概括今日美股市场整体表现，包括三大指数涨跌、成交量变化）
 
 ### 二、指数点评
-（分析上证、深证、创业板等各指数走势特点）
+（分析道琴斯、标普500、纳斯达克各指数走势特点）
 
-### 三、资金动向
-（解读成交额流向的含义）
+### 三、Mag 7 表现
+（分析科技七巨头今日走势，判断Risk-On/Risk-Off信号）
 
 ### 四、热点解读
-（分析领涨领跌板块背后的逻辑和驱动因素）
+（分析领涨领跌板块背后的逻辑和驱动因素，如AI、芯片、新能源等）
 
-### 五、后市展望
+### 五、美联储/宏观影响
+（分析Fed政策预期、通胀数据、就业数据等对市场的影响）
+
+### 六、后市展望
 （结合当前走势和新闻，给出明日市场预判）
 
-### 六、风险提示
-（需要关注的风险点）
+### 七、风险提示
+（需要关注的风险点，如财报季、经CPI/PPI、地缘政治等）
 
 ---
 
@@ -430,10 +433,10 @@ class MarketAnalyzer:
         top_text = "、".join([s['name'] for s in overview.top_sectors[:3]])
         bottom_text = "、".join([s['name'] for s in overview.bottom_sectors[:3]])
         
-        report = f"""## 📊 {overview.date} 大盘复盘
+        report = f"""## 📊 {overview.date} 美股复盘
 
 ### 一、市场总结
-今日A股市场整体呈现**{market_mood}**态势。
+今日美股市场整体呈现**{market_mood}**态势。
 
 ### 二、主要指数
 {indices_text}
