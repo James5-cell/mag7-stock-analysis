@@ -284,6 +284,148 @@ class YfinanceFetcher(BaseFetcher):
 
         return None
 
+    def get_us_indices(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        获取美股三大指数行情
+        - ^GSPC: S&P 500
+        - ^IXIC: Nasdaq Composite
+        - ^DJI: Dow Jones Industrial Average
+        """
+        import yfinance as yf
+
+        us_indices = {
+            '^GSPC': '标普500',
+            '^IXIC': '纳斯达克',
+            '^DJI': '道琼斯',
+        }
+
+        results = []
+        try:
+            for yf_code, name in us_indices.items():
+                try:
+                    ticker = yf.Ticker(yf_code)
+                    hist = ticker.history(period='2d')
+                    if hist.empty:
+                        logger.warning(f"[Yfinance] {name} 无数据")
+                        continue
+
+                    today = hist.iloc[-1]
+                    prev = hist.iloc[-2] if len(hist) > 1 else today
+
+                    price = float(today['Close'])
+                    prev_close = float(prev['Close'])
+                    change = price - prev_close
+                    change_pct = (change / prev_close) * 100 if prev_close else 0
+
+                    high = float(today['High'])
+                    low = float(today['Low'])
+                    amplitude = ((high - low) / prev_close * 100) if prev_close else 0
+
+                    results.append({
+                        'code': yf_code,
+                        'name': name,
+                        'current': round(price, 2),
+                        'change': round(change, 2),
+                        'change_pct': round(change_pct, 2),
+                        'open': round(float(today['Open']), 2),
+                        'high': round(high, 2),
+                        'low': round(low, 2),
+                        'prev_close': round(prev_close, 2),
+                        'volume': int(today['Volume']),
+                        'amplitude': round(amplitude, 2)
+                    })
+                    logger.info(f"[Yfinance] 获取美股指数 {name}: {price:.2f} ({change_pct:+.2f}%)")
+
+                except Exception as e:
+                    logger.warning(f"[Yfinance] 获取 {name} 失败: {e}")
+                    continue
+
+            if results:
+                logger.info(f"[Yfinance] 成功获取 {len(results)} 个美股指数")
+                return results
+
+        except Exception as e:
+            logger.error(f"[Yfinance] 获取美股指数失败: {e}")
+
+        return None
+
+    def get_mag7_performance(self) -> Optional[Dict[str, Any]]:
+        """
+        获取 Magnificent 7 科技七巨头的今日表现
+        返回：每只股票的涨跌幅 + 整体平均涨跌幅
+        """
+        import yfinance as yf
+
+        mag7_stocks = {
+            'NVDA': 'NVIDIA',
+            'AAPL': 'Apple',
+            'MSFT': 'Microsoft',
+            'GOOGL': 'Google',
+            'META': 'Meta',
+            'AMZN': 'Amazon',
+            'TSLA': 'Tesla',
+        }
+
+        stocks_data = []
+        total_change_pct = 0
+        success_count = 0
+
+        try:
+            for symbol, name in mag7_stocks.items():
+                try:
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period='2d')
+                    if hist.empty:
+                        continue
+
+                    today = hist.iloc[-1]
+                    prev = hist.iloc[-2] if len(hist) > 1 else today
+
+                    price = float(today['Close'])
+                    prev_close = float(prev['Close'])
+                    change_pct = ((price - prev_close) / prev_close) * 100 if prev_close else 0
+
+                    stocks_data.append({
+                        'symbol': symbol,
+                        'name': name,
+                        'price': round(price, 2),
+                        'change_pct': round(change_pct, 2),
+                    })
+                    total_change_pct += change_pct
+                    success_count += 1
+                    logger.debug(f"[Yfinance] {symbol}: ${price:.2f} ({change_pct:+.2f}%)")
+
+                except Exception as e:
+                    logger.warning(f"[Yfinance] 获取 {symbol} 失败: {e}")
+                    continue
+
+            if success_count > 0:
+                avg_change = total_change_pct / success_count
+                # 判断 Risk-On / Risk-Off
+                if avg_change > 1:
+                    sentiment = "🟢 Risk-On (强势)"
+                elif avg_change > 0:
+                    sentiment = "🟢 Risk-On (偏多)"
+                elif avg_change > -1:
+                    sentiment = "⚪ Neutral (中性)"
+                else:
+                    sentiment = "🔴 Risk-Off (避险)"
+
+                result = {
+                    'stocks': stocks_data,
+                    'avg_change_pct': round(avg_change, 2),
+                    'sentiment': sentiment,
+                    'up_count': sum(1 for s in stocks_data if s['change_pct'] > 0),
+                    'down_count': sum(1 for s in stocks_data if s['change_pct'] < 0),
+                }
+                logger.info(f"[Yfinance] Mag 7 平均涨跌: {avg_change:+.2f}% ({sentiment})")
+                return result
+
+        except Exception as e:
+            logger.error(f"[Yfinance] 获取 Mag 7 数据失败: {e}")
+
+        return None
+
 
 if __name__ == "__main__":
     # 测试代码

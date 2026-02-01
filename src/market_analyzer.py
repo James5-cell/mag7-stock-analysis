@@ -99,6 +99,60 @@ class MarketAnalyzer:
         self.search_service = search_service
         self.analyzer = analyzer
         self.data_manager = DataFetcherManager()
+        
+        # 直接使用 YfinanceFetcher 获取美股数据
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+        self.yf_fetcher = YfinanceFetcher()
+        
+        # 缓存宏观数据
+        self._macro_context = None
+
+    def get_macro_context(self) -> str:
+        """
+        获取宏观数据快照，用于注入到 AI Prompt 中
+        
+        Returns:
+            格式化的宏观数据字符串
+        """
+        lines = ["【今日市场实时数据】（必须基于此数据进行分析）", ""]
+        
+        # 1. 获取美股三大指数
+        us_indices = self.yf_fetcher.get_us_indices()
+        if us_indices:
+            lines.append("## 美股三大指数")
+            lines.append("| 指数 | 现价 | 涨跌幅 | 成交量 |")
+            lines.append("|------|------|--------|--------|")
+            for idx in us_indices:
+                direction = "🟢" if idx['change_pct'] > 0 else "🔴" if idx['change_pct'] < 0 else "⚪"
+                vol_str = f"{idx['volume']:,}" if idx['volume'] else "N/A"
+                lines.append(f"| {idx['name']} | {idx['current']:,.2f} | {direction} {idx['change_pct']:+.2f}% | {vol_str} |")
+            lines.append("")
+        else:
+            lines.append("## 美股三大指数")
+            lines.append("⚠️ 数据获取失败，请根据新闻进行分析")
+            lines.append("")
+        
+        # 2. 获取 Mag 7 表现
+        mag7 = self.yf_fetcher.get_mag7_performance()
+        if mag7:
+            lines.append("## Mag 7 科技七巨头表现")
+            lines.append(f"**整体情绪**: {mag7['sentiment']}")
+            lines.append(f"**平均涨跌幅**: {mag7['avg_change_pct']:+.2f}%")
+            lines.append(f"**上涨/下跌**: {mag7['up_count']}涨 / {mag7['down_count']}跌")
+            lines.append("")
+            lines.append("| 股票 | 现价 | 涨跌幅 |")
+            lines.append("|------|------|--------|")
+            for stock in mag7['stocks']:
+                direction = "🟢" if stock['change_pct'] > 0 else "🔴" if stock['change_pct'] < 0 else "⚪"
+                lines.append(f"| {stock['symbol']} ({stock['name']}) | ${stock['price']:,.2f} | {direction} {stock['change_pct']:+.2f}% |")
+            lines.append("")
+        else:
+            lines.append("## Mag 7 科技七巨头表现")
+            lines.append("⚠️ 数据获取失败")
+            lines.append("")
+        
+        self._macro_context = "\n".join(lines)
+        return self._macro_context
 
     def get_market_overview(self) -> MarketOverview:
         """
@@ -318,21 +372,14 @@ class MarketAnalyzer:
             return self._generate_template_review(overview, news)
     
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
-        """构建复盘报告 Prompt"""
-        # 指数行情信息（简洁格式，不用emoji）
-        indices_text = ""
-        for idx in overview.indices:
-            direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
-            indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+        """构建复盘报告 Prompt - 注入宏观数据"""
         
-        # 板块信息
-        top_sectors_text = ", ".join([f"{s['name']}({s['change_pct']:+.2f}%)" for s in overview.top_sectors[:3]])
-        bottom_sectors_text = ", ".join([f"{s['name']}({s['change_pct']:+.2f}%)" for s in overview.bottom_sectors[:3]])
+        # 🔥 关键：先获取宏观数据快照
+        macro_context = self.get_macro_context()
         
         # 新闻信息 - 支持 SearchResult 对象或字典
         news_text = ""
         for i, n in enumerate(news[:6], 1):
-            # 兼容 SearchResult 对象和字典
             if hasattr(n, 'title'):
                 title = n.title[:50] if n.title else ''
                 snippet = n.snippet[:100] if n.snippet else ''
@@ -341,69 +388,51 @@ class MarketAnalyzer:
                 snippet = n.get('snippet', '')[:100]
             news_text += f"{i}. {title}\n   {snippet}\n"
         
-        prompt = f"""你是一位专业的美股市场分析师，请根据以下数据生成一份简洁的美股复盘报告。
+        prompt = f"""你是一位专业的美股市场分析师，请根据以下【实时数据】生成美股复盘报告。
 
-【重要】输出要求：
-- 必须输出纯 Markdown 文本格式
-- 禁止输出 JSON 格式
-- 禁止输出代码块
-- emoji 仅在标题处少量使用（每个标题最多1个）
+⚠️ 【重要规则】⚠️
+1. 必须使用下方提供的【今日市场实时数据】进行分析
+2. 禁止说"缺乏数据"、"无法获取"、"数据缺失"等
+3. 必须引用具体的指数点位和涨跌幅数字
+4. 必须输出纯 Markdown 文本格式（禁止 JSON/代码块）
 
 ---
 
-# 今日市场数据
+{macro_context}
 
-## 日期
-{overview.date}
+---
 
-## 主要指数
-{indices_text if indices_text else "暂无指数数据（接口异常）"}
-
-## 市场概况
-- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
-- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {overview.total_amount:.0f} 亿元
-
-## 板块表现
-领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
-领跌: {bottom_sectors_text if bottom_sectors_text else "暂无数据"}
-
-## 市场新闻
+## 市场新闻参考
 {news_text if news_text else "暂无相关新闻"}
 
-{"注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。" if not indices_text else ""}
-
 ---
 
-# 输出格式模板（请严格按此格式输出）
+# 输出格式（请严格按此格式输出）
 
-## 📊 {overview.date} 大盘复盘
+## 📊 {overview.date} 美股复盘
 
 ### 一、市场总结
-（2-3句话概括今日美股市场整体表现，包括三大指数涨跌、成交量变化）
+（用2-3句话概括今日三大指数表现，必须引用上方的具体数字）
 
 ### 二、指数点评
-（分析道琴斯、标普500、纳斯达克各指数走势特点）
+（分别点评道琼斯、标普500、纳斯达克的走势，引用具体涨跌幅）
 
 ### 三、Mag 7 表现
-（分析科技七巨头今日走势，判断Risk-On/Risk-Off信号）
+（分析科技七巨头整体情绪，判断 Risk-On/Risk-Off 信号，引用平均涨跌幅）
 
 ### 四、热点解读
-（分析领涨领跌板块背后的逻辑和驱动因素，如AI、芯片、新能源等）
+（分析今日市场热点，如 AI、芯片、Fed 政策等）
 
-### 五、美联储/宏观影响
-（分析Fed政策预期、通胀数据、就业数据等对市场的影响）
+### 五、后市展望
+（结合走势和新闻，给出明日市场预判）
 
-### 六、后市展望
-（结合当前走势和新闻，给出明日市场预判）
-
-### 七、风险提示
-（需要关注的风险点，如财报季、经CPI/PPI、地缘政治等）
+### 六、风险提示
+（需要关注的风险点）
 
 ---
 
-请直接输出复盘报告内容，不要输出其他说明文字。
-"""
+请直接输出复盘报告，不要输出其他说明文字。"""
+        
         return prompt
     
     def _generate_template_review(self, overview: MarketOverview, news: List) -> str:
