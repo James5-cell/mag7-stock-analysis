@@ -339,9 +339,9 @@ class SerpAPISearchProvider(BaseSearchProvider):
                 "engine": "google",
                 "q": query,
                 "api_key": api_key,
-                "google_domain": "google.com.hk", # 使用香港谷歌，中文支持较好
-                "hl": "zh-cn",  # 中文界面
-                "gl": "cn",     # 中国地区偏好
+                "google_domain": "google.com",  # 使用全球谷歌，英文资料为主
+                "hl": "en",     # 英文界面
+                "gl": "us",     # 美国地区偏好（获取美股相关英文资讯）
                 "tbs": tbs,     # 时间范围限制
                 "num": max_results # 请求的结果数量，注意：Google API有时不严格遵守
             }
