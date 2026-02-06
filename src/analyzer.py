@@ -1287,7 +1287,24 @@ Please output the complete JSON format Decision Dashboard."""
             advice = 'Sell'
         
         # Take first 500 chars as summary
-        summary = response_text[:500] if response_text else 'No analysis result'
+        summary = response_text[:800] if response_text else 'No analysis result'
+        
+        # Construct a fallback dashboard so notification.py has something to show
+        fallback_dashboard = {
+            "core_conclusion": {
+                "one_sentence": f"JSON parsing failed. Showing raw analysis: {summary[:100]}..."
+            },
+            "intelligence": {
+                "sentiment_summary": "Analysis extracted from raw text due to format error.",
+                "risk_alerts": ["JSON Format Error - Please check raw output below"]
+            },
+            "battle_plan": {
+                 "position_strategy": {
+                     "suggested_position": advice
+                 }
+            },
+            "data_perspective": {}
+        }
         
         return AnalysisResult(
             code=code,
@@ -1296,6 +1313,7 @@ Please output the complete JSON format Decision Dashboard."""
             trend_prediction=trend,
             operation_advice=advice,
             confidence_level='Low',
+            dashboard=fallback_dashboard, # Populate fallback dashboard
             analysis_summary=summary,
             key_points='JSON parsing failed, for reference only',
             risk_warning='Analysis result may be inaccurate, please cross-check.',

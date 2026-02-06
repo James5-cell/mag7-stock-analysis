@@ -623,7 +623,16 @@ class NotificationService:
         
         # 2. 核心结论 (One Sentence)
         core = dashboard.get('core_conclusion', {}) if dashboard else {}
-        if core and core.get('one_sentence'):
+        
+        # Fallback: If dashboard is empty, show analysis summary
+        if not dashboard and hasattr(result, 'analysis_summary') and result.analysis_summary:
+            lines.extend([
+                "> **Note**: Detailed structured analysis parsing failed.",
+                "",
+                f"{result.analysis_summary}",
+                "",
+            ])
+        elif core and core.get('one_sentence'):
              lines.extend([
                 f"> {core['one_sentence']}",
                 "",
