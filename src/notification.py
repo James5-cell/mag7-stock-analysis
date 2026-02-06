@@ -587,253 +587,131 @@ class NotificationService:
 
         # 逐个股票的决策仪表盘
         for result in sorted_results:
-            signal_text, signal_emoji, signal_tag = self._get_signal_level(result)
-            dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-            
-            # 股票名称（优先使用 dashboard 或 result 中的名称）
-            stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
-            
-            report_lines.extend([
-                f"## {signal_emoji} {stock_name} ({result.code})",
-                "",
-            ])
-            
-            # ========== Intelligence & Fundamental Overview (Placed at Top) ==========
-            intel = dashboard.get('intelligence', {}) if dashboard else {}
-            if intel:
-                report_lines.extend([
-                    "### 📰 Intel Overview",
-                    "",
-                ])
-                
-                # Sentiment Summary
-                if intel.get('sentiment_summary'):
-                    report_lines.append(f"**💭 Sentiment**: {intel['sentiment_summary']}")
-                
-                # Earnings Outlook
-                if intel.get('earnings_outlook'):
-                    report_lines.append(f"**📊 Earnings**: {intel['earnings_outlook']}")
-                
-                # Risk Alerts
-                risk_alerts = intel.get('risk_alerts', [])
-                if risk_alerts:
-                    report_lines.append("")
-                    report_lines.append("**🚨 Risk Alerts**:")
-                    for alert in risk_alerts:
-                        report_lines.append(f"- {alert}")
-                
-                # Positive Catalysts
-                catalysts = intel.get('positive_catalysts', [])
-                if catalysts:
-                    report_lines.append("")
-                    report_lines.append("**✨ Catalysts**:")
-                    for cat in catalysts:
-                        report_lines.append(f"- {cat}")
-                
-                # Latest News
-                if intel.get('latest_news'):
-                    report_lines.append("")
-                    report_lines.append(f"**📢 Latest News**: {intel['latest_news']}")
-                
-                report_lines.append("")
-            
-            # ========== Core Conclusion ==========
-            core = dashboard.get('core_conclusion', {}) if dashboard else {}
-            one_sentence = core.get('one_sentence', result.analysis_summary)
-            time_sense = core.get('time_sensitivity', 'This Week')
-            pos_advice = core.get('position_advice', {})
-            
-            report_lines.extend([
-                "### 📌 Core Conclusion",
-                "",
-                f"**{signal_emoji} {signal_text}** | {result.trend_prediction}",
-                "",
-                f"> **Verdict**: {one_sentence}",
-                "",
-                f"⏰ **Timing**: {time_sense}",
-                "",
-            ])
-            
-            # Position Advice
-            if pos_advice:
-                report_lines.extend([
-                    "| Position | Advice |",
-                    "|----------|--------|",
-                    f"| 🆕 **Empty** | {pos_advice.get('no_position', result.operation_advice)} |",
-                    f"| 💼 **Holding** | {pos_advice.get('has_position', 'Hold')} |",
-                    "",
-                ])
-            
-            # ========== Macro Signal (Mag 7 Exclusive) ==========
-            macro_signal = dashboard.get('macro_signal', {}) if dashboard else {}
-            if macro_signal:
-                risk_indicator = macro_signal.get('risk_appetite_indicator', 'Neutral')
-                risk_emoji = "🟢" if risk_indicator == "Risk-On" else ("🔴" if risk_indicator == "Risk-Off" else "⚪")
-                report_lines.extend([
-                    "### 🌍 Macro Signal",
-                    "",
-                    f"**Market Weight**: {macro_signal.get('market_impact_weight', 'N/A')} | **Risk Appetite**: {risk_emoji} {risk_indicator}",
-                    "",
-                    f"**Sector Resonance**: {macro_signal.get('sector_resonance', 'N/A')}",
-                    "",
-                    f"> 💡 *{macro_signal.get('macro_interpretation', 'Analysis pending')}*",
-                    "",
-                ])
-            
-            # ========== Data Perspective ==========
-            data_persp = dashboard.get('data_perspective', {}) if dashboard else {}
-            if data_persp:
-                trend_data = data_persp.get('trend_status', {})
-                price_data = data_persp.get('price_position', {})
-                vol_data = data_persp.get('volume_analysis', {})
-                
-                report_lines.extend([
-                    "### 📊 Data Perspective",
-                    "",
-                ])
-                
-                # Trend Status
-                if trend_data:
-                    is_bullish = "✅ Yes" if trend_data.get('is_bullish', False) else "❌ No"
-                    report_lines.extend([
-                        f"**MA Alignment**: {trend_data.get('ma_alignment', 'N/A')} | Bullish: {is_bullish} | Trend Score: {trend_data.get('trend_score', 'N/A')}/100",
-                        "",
-                    ])
-                
-                # Price Position
-                if price_data:
-                    bias_status = price_data.get('bias_status', 'N/A')
-                     # simple translations for bias status if possible, but they come from JSON so might be English already if prompt worked
-                    bias_emoji = "✅" if bias_status in ["安全", "Safe"] else ("⚠️" if bias_status in ["警戒", "Caution"] else "🚨")
-                    report_lines.extend([
-                        "| Price Indicator | Value |",
-                        "|----------------|-------|",
-                        f"| Current | {price_data.get('current_price', 'N/A')} |",
-                        f"| MA5 | {price_data.get('ma5', 'N/A')} |",
-                        f"| MA10 | {price_data.get('ma10', 'N/A')} |",
-                        f"| MA20 | {price_data.get('ma20', 'N/A')} |",
-                        f"| Bias(MA5) | {price_data.get('bias_ma5', 'N/A')}% {bias_emoji}{bias_status} |",
-                        f"| Support | {price_data.get('support_level', 'N/A')} |",
-                        f"| Resistance | {price_data.get('resistance_level', 'N/A')} |",
-                        "",
-                    ])
-                
-                # Volume Analysis
-                if vol_data:
-                    report_lines.extend([
-                        f"**Volume**: Ratio {vol_data.get('volume_ratio', 'N/A')} ({vol_data.get('volume_status', '')}) | Turnover {vol_data.get('turnover_rate', 'N/A')}%",
-                        f"💡 *{vol_data.get('volume_meaning', '')}*",
-                        "",
-                    ])
-                
-                # Institutional Sentiment
-                inst_data = data_persp.get('institutional_sentiment', {}) or data_persp.get('chip_structure', {})
-                if inst_data:
-                    if 'sentiment_health' in inst_data:
-                        health = inst_data.get('sentiment_health', 'N/A')
-                        health_emoji = "✅" if health in ["健康", "Healthy"] else ("⚠️" if health in ["中性", "Neutral"] else "🚨")
-                        report_lines.extend([
-                            f"**Inst. Sentiment**: {inst_data.get('analyst_consensus', 'N/A')} | Flow: {inst_data.get('institutional_flow', 'N/A')} {health_emoji}{health}",
-                            "",
-                        ])
-                    else:
-                         # Legacy Chip Support (Keep minimal or translate if needed, mostly unused for US)
-                        pass
-            
-            # 舆情情报已移至顶部显示
-            
-            # ========== Battle Plan ==========
-            battle = dashboard.get('battle_plan', {}) if dashboard else {}
-            if battle:
-                report_lines.extend([
-                    "### 🎯 Battle Plan",
-                    "",
-                ])
-                
-                # Sniper Points
-                sniper = battle.get('sniper_points', {})
-                if sniper:
-                    report_lines.extend([
-                        "**📍 Sniper Points**",
-                        "",
-                        "| Type | Price |",
-                        "|------|-------|",
-                        f"| 🎯 Ideal Buy | {sniper.get('ideal_buy', 'N/A')} |",
-                        f"| 🔵 2nd Buy | {sniper.get('secondary_buy', 'N/A')} |",
-                        f"| 🛑 Stop Loss | {sniper.get('stop_loss', 'N/A')} |",
-                        f"| 🎊 Target | {sniper.get('take_profit', 'N/A')} |",
-                        "",
-                    ])
-                
-                # Position Strategy
-                position = battle.get('position_strategy', {})
-                if position:
-                    report_lines.extend([
-                        f"**💰 Position**: {position.get('suggested_position', 'N/A')}",
-                        f"- Entry: {position.get('entry_plan', 'N/A')}",
-                        f"- Risk: {position.get('risk_control', 'N/A')}",
-                        "",
-                    ])
-                
-                # Checklist
-                checklist = battle.get('action_checklist', []) if battle else []
-                if checklist:
-                    report_lines.extend([
-                        "**✅ Actions**",
-                        "",
-                    ])
-                    for item in checklist:
-                        report_lines.append(f"- {item}")
-                    report_lines.append("")
-            
-            # 如果没有 dashboard，显示传统格式
-            if not dashboard:
-                # 操作理由
-                if result.buy_reason:
-                    report_lines.extend([
-                        f"**💡 操作理由**: {result.buy_reason}",
-                        "",
-                    ])
-                
-                # 风险提示
-                if result.risk_warning:
-                    report_lines.extend([
-                        f"**⚠️ 风险提示**: {result.risk_warning}",
-                        "",
-                    ])
-                
-                # 技术面分析
-                if result.ma_analysis or result.volume_analysis:
-                    report_lines.extend([
-                        "### 📊 技术面",
-                        "",
-                    ])
-                    if result.ma_analysis:
-                        report_lines.append(f"**均线**: {result.ma_analysis}")
-                    if result.volume_analysis:
-                        report_lines.append(f"**量能**: {result.volume_analysis}")
-                    report_lines.append("")
-                
-                # 消息面
-                if result.news_summary:
-                    report_lines.extend([
-                        "### 📰 消息面",
-                        f"{result.news_summary}",
-                        "",
-                    ])
-            
-            report_lines.extend([
-                "---",
-                "",
-            ])
-        
-        # 底部（去除免责声明）
+            report_lines.append(self.generate_full_single_stock_report(result, is_aggregated=True))
+
+        # 底部信息（去除免责声明）
         report_lines.extend([
             "",
             f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
         
         return "\n".join(report_lines)
+
+    def generate_full_single_stock_report(self, result: AnalysisResult, is_aggregated: bool = False) -> str:
+        """
+        生成单只股票的完整分析报告 (优化排版)
+        
+        Args:
+            result: 分析结果对象
+            is_aggregated: 是否作为汇总报告的一部分 (如果是，则不显示重复的头部信息)
+        """
+        signal_text, signal_emoji, signal_tag = self._get_signal_level(result)
+        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        
+        # 股票名称
+        stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
+        
+        lines = []
+        
+        # 1. 标题头 (如果是单独推送，加个醒目的 Header)
+        lines.extend([
+            f"## {signal_emoji} {stock_name} ({result.code})",
+            "",
+            f"**Signal**: {signal_tag} | **Score**: {result.sentiment_score} | **Trend**: {result.trend_prediction}",
+            "",
+        ])
+        
+        # 2. 核心结论 (One Sentence)
+        core = dashboard.get('core_conclusion', {}) if dashboard else {}
+        if core and core.get('one_sentence'):
+             lines.extend([
+                f"> {core['one_sentence']}",
+                "",
+            ])
+
+        # 3. 关键情报 (Intelligence)
+        intel = dashboard.get('intelligence', {}) if dashboard else {}
+        if intel:
+            lines.extend([
+                "### 📰 Intel Overview",
+                "",
+            ])
+            # Sentiment Summary
+            if intel.get('sentiment_summary'):
+                lines.append(f"**💭 Sentiment**: {intel['sentiment_summary']}")
+            # Earnings
+            if intel.get('earnings_outlook'):
+                lines.append(f"**📊 Earnings**: {intel['earnings_outlook']}")
+            
+            # Risk Alerts
+            risk_alerts = intel.get('risk_alerts', [])
+            if risk_alerts:
+                lines.append("")
+                lines.append("**🚨 Risk Alerts**:")
+                for alert in risk_alerts:
+                    lines.append(f"- {alert}")
+            
+            # Latest News (Limit 2)
+            if intel.get('latest_news'):
+                lines.append("")
+                # 如果 news 是列表
+                if isinstance(intel['latest_news'], list):
+                     lines.append("**📢 Top News**:")
+                     for i, news in enumerate(intel['latest_news'][:2]):
+                         lines.append(f"- {news}")
+                else:
+                     lines.append(f"**📢 Latest News**: {intel['latest_news']}")
+            lines.append("")
+
+        # 4. 详细分析 (Technical & Fundamental)
+        pivot = dashboard.get('data_pivot', {}) if dashboard else {}
+        lines.append("### 🔍 Analysis Details")
+        lines.append("")
+        
+        # Technical
+        if pivot.get('technical_signal'):
+            lines.append(f"**📈 Technical**: {pivot['technical_signal']}")
+        
+        # Fundamental
+        if pivot.get('fundamental_quality'):
+             lines.append(f"**🏢 Fundamental**: {pivot['fundamental_quality']}")
+             
+        # Valuation (if available)
+        if pivot.get('valuation_status'):
+             lines.append(f"**💰 Valuation**: {pivot['valuation_status']}")
+        
+        lines.append("")
+
+        # 5. 作战计划 (Action Plan) - 最重要
+        plan = dashboard.get('action_plan', {}) if dashboard else {}
+        if plan:
+            lines.append("### ⚔️ Action Plan")
+            lines.append("")
+            if plan.get('strategy'):
+                lines.append(f"**Strategy**: {plan['strategy']}")
+            
+            if plan.get('buy_zone') or plan.get('sell_zone'):
+                if plan.get('buy_zone'): lines.append(f"- **Buy Zone**: {plan['buy_zone']}")
+                if plan.get('sell_zone'): lines.append(f"- **Sell Zone**: {plan['sell_zone']}")
+                if plan.get('stop_loss'): lines.append(f"- **Stop Loss**: {plan['stop_loss']}")
+            else:
+                 # Fallback to result fields if dashboard plan is empty
+                 if hasattr(result, 'pressure_price') and result.pressure_price:
+                     lines.append(f"- **Resistance**: {result.pressure_price}")
+                 if hasattr(result, 'support_price') and result.support_price:
+                     lines.append(f"- **Support**: {result.support_price}")
+            
+            lines.append("")
+        
+        # 单独推送时，添加分割线，方便视觉区分
+        if not is_aggregated:
+            lines.extend([
+                "",
+                f"*Generated: {datetime.now().strftime('%H:%M:%S')}*",
+                "---" 
+            ])
+            
+        return "\n".join(lines)
     
     def generate_wechat_dashboard(self, results: List[AnalysisResult]) -> str:
         """
@@ -1998,6 +1876,7 @@ class NotificationService:
                 # 重置
                 current_chunk = [section]
                 current_length = section_length
+                
             else:
                 current_chunk.append(section)
                 current_length += section_length
@@ -2005,9 +1884,62 @@ class NotificationService:
         # 发送最后一块
         if current_chunk:
             chunk_content = "\n---\n".join(current_chunk)
-            logger.info(f"发送 Telegram 消息块 {chunk_index}（最后）...")
-            if not self._send_telegram_message(api_url, chat_id, chunk_content):
-                all_success = False
+            # 再次检查大小 (防止最后累积的块过大)
+            if len(chunk_content) > max_length:
+                 # 极端情况：最后一块也过大，需要强制分割
+                 if not self._send_telegram_force_chunked(api_url, chat_id, chunk_content, max_length):
+                     all_success = False
+            else:
+                logger.info(f"发送 Telegram 消息块 {chunk_index} (最后)...")
+                if not self._send_telegram_message(api_url, chat_id, chunk_content):
+                    all_success = False
+
+        return all_success
+
+    def _send_telegram_force_chunked(self, api_url: str, chat_id: str, content: str, max_length: int) -> bool:
+        """
+        强制按行/字符分割发送（处理超长段落）
+        """
+        import time
+        
+        lines = content.split('\n')
+        chunks = []
+        current_chunk = ""
+        
+        for line in lines:
+            line_len = len(line) + 1 # +1 for newline
+            
+            # 如果单行就超过最大长度 (极少见)
+            if line_len > max_length:
+                # 必须强制截断
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = ""
+                
+                # 这种情况下只能按字符发了，或者直接截断
+                # 这里简单处理：分成多条发
+                for i in range(0, len(line), max_length):
+                    chunks.append(line[i:i+max_length])
+                continue
+
+            if len(current_chunk) + line_len > max_length:
+                chunks.append(current_chunk)
+                current_chunk = line
+            else:
+                 current_chunk += ("\n" + line if current_chunk else line)
+        
+        if current_chunk:
+            chunks.append(current_chunk)
+            
+        success = True
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            logger.info(f"发送 Telegram 强制分页消息 {i+1}/{total}...")
+            if not self._send_telegram_message(api_url, chat_id, chunk):
+                success = False
+            time.sleep(1) # 避免限流
+            
+        return success
         
         return all_success
     

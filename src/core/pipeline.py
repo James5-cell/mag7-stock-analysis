@@ -420,9 +420,9 @@ class StockAnalysisPipeline:
                     try:
                         # 根据报告类型选择生成方法
                         if report_type == ReportType.FULL:
-                            # 完整报告：使用决策仪表盘格式
-                            report_content = self.notifier.generate_dashboard_report([result])
-                            logger.info(f"[{code}] 使用完整报告格式")
+                            # 完整报告：使用新的单股完整报告格式
+                            report_content = self.notifier.generate_full_single_stock_report(result)
+                            logger.info(f"[{code}] 使用单股完整报告格式")
                         else:
                             # 精简报告：使用单股报告格式（默认）
                             report_content = self.notifier.generate_single_stock_report(result)
