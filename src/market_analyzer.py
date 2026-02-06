@@ -114,41 +114,41 @@ class MarketAnalyzer:
         Returns:
             格式化的宏观数据字符串
         """
-        lines = ["【今日市场实时数据】（必须基于此数据进行分析）", ""]
+        lines = ["【Today's Real-time Data】 (Must analyze based on this)", ""]
         
-        # 1. 获取美股三大指数
+        # 1. Get US Main Indices
         us_indices = self.yf_fetcher.get_us_indices()
         if us_indices:
-            lines.append("## 美股三大指数")
-            lines.append("| 指数 | 现价 | 涨跌幅 | 成交量 |")
-            lines.append("|------|------|--------|--------|")
+            lines.append("## US Main Indices")
+            lines.append("| Index | Price | Change | Volume |")
+            lines.append("|-------|-------|--------|--------|")
             for idx in us_indices:
                 direction = "🟢" if idx['change_pct'] > 0 else "🔴" if idx['change_pct'] < 0 else "⚪"
                 vol_str = f"{idx['volume']:,}" if idx['volume'] else "N/A"
                 lines.append(f"| {idx['name']} | {idx['current']:,.2f} | {direction} {idx['change_pct']:+.2f}% | {vol_str} |")
             lines.append("")
         else:
-            lines.append("## 美股三大指数")
-            lines.append("⚠️ 数据获取失败，请根据新闻进行分析")
+            lines.append("## US Main Indices")
+            lines.append("⚠️ Data retrieval failed, please analyze based on news.")
             lines.append("")
         
-        # 2. 获取 Mag 7 表现
+        # 2. Get Mag 7 Performance
         mag7 = self.yf_fetcher.get_mag7_performance()
         if mag7:
-            lines.append("## Mag 7 科技七巨头表现")
-            lines.append(f"**整体情绪**: {mag7['sentiment']}")
-            lines.append(f"**平均涨跌幅**: {mag7['avg_change_pct']:+.2f}%")
-            lines.append(f"**上涨/下跌**: {mag7['up_count']}涨 / {mag7['down_count']}跌")
+            lines.append("## Mag 7 Performance")
+            lines.append(f"**Overall Sentiment**: {mag7['sentiment']}")
+            lines.append(f"**Avg Change**: {mag7['avg_change_pct']:+.2f}%")
+            lines.append(f"**Up/Down**: {mag7['up_count']} Up / {mag7['down_count']} Down")
             lines.append("")
-            lines.append("| 股票 | 现价 | 涨跌幅 |")
-            lines.append("|------|------|--------|")
+            lines.append("| Stock | Price | Change |")
+            lines.append("|-------|-------|--------|")
             for stock in mag7['stocks']:
                 direction = "🟢" if stock['change_pct'] > 0 else "🔴" if stock['change_pct'] < 0 else "⚪"
                 lines.append(f"| {stock['symbol']} ({stock['name']}) | ${stock['price']:,.2f} | {direction} {stock['change_pct']:+.2f}% |")
             lines.append("")
         else:
-            lines.append("## Mag 7 科技七巨头表现")
-            lines.append("⚠️ 数据获取失败")
+            lines.append("## Mag 7 Performance")
+            lines.append("⚠️ Data retrieval failed")
             lines.append("")
         
         self._macro_context = "\n".join(lines)
@@ -388,13 +388,13 @@ class MarketAnalyzer:
                 snippet = n.get('snippet', '')[:100]
             news_text += f"{i}. {title}\n   {snippet}\n"
         
-        prompt = f"""你是一位专业的美股市场分析师，请根据以下【实时数据】生成美股复盘报告。
+        prompt = f"""You are a professional US stock market analyst. Please generate a US Market Review Report based on the following 【Real-time Data】.
 
-⚠️ 【重要规则】⚠️
-1. 必须使用下方提供的【今日市场实时数据】进行分析
-2. 禁止说"缺乏数据"、"无法获取"、"数据缺失"等
-3. 必须引用具体的指数点位和涨跌幅数字
-4. 必须输出纯 Markdown 文本格式（禁止 JSON/代码块）
+⚠️ 【Important Rules】⚠️
+1. You MUST use the provided 【Today's Real-time Data】 below for analysis.
+2. DO NOT say "lack of data", "unable to retrieve", "data missing", etc.
+3. You MUST cite specific index levels and percentage changes from the data.
+4. You MUST output in pure Markdown format (NO JSON/Code blocks).
 
 ---
 
@@ -402,36 +402,36 @@ class MarketAnalyzer:
 
 ---
 
-## 市场新闻参考
-{news_text if news_text else "暂无相关新闻"}
+## Market News References
+{news_text if news_text else "No relevant news currently."}
 
 ---
 
-# 输出格式（请严格按此格式输出）
+# Output Format (Please strictly follow this format)
 
-## 📊 {overview.date} 美股复盘
+## 📊 {overview.date} US Market Review
 
-### 一、市场总结
-（用2-3句话概括今日三大指数表现，必须引用上方的具体数字）
+### 1. Market Summary
+(Summarize today's performance of the 3 major indices in 2-3 sentences, citing specific numbers from above)
 
-### 二、指数点评
-（分别点评道琼斯、标普500、纳斯达克的走势，引用具体涨跌幅）
+### 2. Index Commentary
+(Comment on Dow Jones, S&P 500, Nasdaq trends separately, citing specific changes)
 
-### 三、Mag 7 表现
-（分析科技七巨头整体情绪，判断 Risk-On/Risk-Off 信号，引用平均涨跌幅）
+### 3. Mag 7 Performance
+(Analyze overall sentiment of the Magnificent 7, judge Risk-On/Risk-Off signals, citing average change)
 
-### 四、热点解读
-（分析今日市场热点，如 AI、芯片、Fed 政策等）
+### 4. Hot Topics
+(Analyze today's market hot topics, e.g., AI, Chips, Fed Policy, etc.)
 
-### 五、后市展望
-（结合走势和新闻，给出明日市场预判）
+### 5. Future Outlook
+(Combine trends and news to predict tomorrow's market)
 
-### 六、风险提示
-（需要关注的风险点）
+### 6. Risk Warning
+(Risk points to watch)
 
 ---
 
-请直接输出复盘报告，不要输出其他说明文字。"""
+Please output the review report directly, without any other explanatory text."""
         
         return prompt
     

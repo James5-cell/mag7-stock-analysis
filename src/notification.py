@@ -517,20 +517,20 @@ class NotificationService:
         advice = result.operation_advice
         score = result.sentiment_score
         
-        if advice in ['强烈买入'] or score >= 80:
-            return ('强烈买入', '💚', '强买')
-        elif advice in ['买入', '加仓'] or score >= 65:
-            return ('买入', '🟢', '买入')
-        elif advice in ['持有'] or 55 <= score < 65:
-            return ('持有', '🟡', '持有')
-        elif advice in ['观望'] or 45 <= score < 55:
-            return ('观望', '⚪', '观望')
-        elif advice in ['减仓'] or 35 <= score < 45:
-            return ('减仓', '🟠', '减仓')
-        elif advice in ['卖出', '强烈卖出'] or score < 35:
-            return ('卖出', '🔴', '卖出')
+        if advice in ['强烈买入', 'Strong Buy'] or score >= 80:
+            return ('Strong Buy', '💚', 'Strong Buy')
+        elif advice in ['买入', '加仓', 'Buy', 'Add'] or score >= 65:
+            return ('Buy', '🟢', 'Buy')
+        elif advice in ['持有', 'Hold'] or 55 <= score < 65:
+            return ('Hold', '🟡', 'Hold')
+        elif advice in ['观望', 'Wait'] or 45 <= score < 55:
+            return ('Wait', '⚪', 'Wait')
+        elif advice in ['减仓', 'Reduce'] or 35 <= score < 45:
+            return ('Reduce', '🟠', 'Reduce')
+        elif advice in ['卖出', '强烈卖出', 'Sell', 'Strong Sell'] or score < 35:
+            return ('Sell', '🔴', 'Sell')
         else:
-            return ('观望', '⚪', '观望')
+            return ('Wait', '⚪', 'Wait')
     
     def generate_dashboard_report(
         self,
@@ -561,23 +561,23 @@ class NotificationService:
         hold_count = sum(1 for r in results if r.operation_advice in ['持有', '观望'])
 
         report_lines = [
-            f"# 🎯 {report_date} 决策仪表盘",
+            f"# 🎯 {report_date} Decision Dashboard",
             "",
-            f"> 共分析 **{len(results)}** 只股票 | 🟢买入:{buy_count} 🟡观望:{hold_count} 🔴卖出:{sell_count}",
+            f"> Analyzed **{len(results)}** stocks | 🟢Buy:{buy_count} 🟡Wait:{hold_count} 🔴Sell:{sell_count}",
             "",
         ]
 
         # === 新增：分析结果摘要 (Issue #112) ===
         if results:
             report_lines.extend([
-                "## 📊 分析结果摘要",
+                "## 📊 Analysis Summary",
                 "",
             ])
             for r in sorted_results:
                 emoji = r.get_emoji()
                 report_lines.append(
                     f"{emoji} **{r.name}({r.code})**: {r.operation_advice} | "
-                    f"评分 {r.sentiment_score} | {r.trend_prediction}"
+                    f"Score {r.sentiment_score} | {r.trend_prediction}"
                 )
             report_lines.extend([
                 "",
@@ -598,89 +598,89 @@ class NotificationService:
                 "",
             ])
             
-            # ========== 舆情与基本面概览（放在最前面）==========
+            # ========== Intelligence & Fundamental Overview (Placed at Top) ==========
             intel = dashboard.get('intelligence', {}) if dashboard else {}
             if intel:
                 report_lines.extend([
-                    "### 📰 重要信息速览",
+                    "### 📰 Intel Overview",
                     "",
                 ])
                 
-                # 舆情情绪总结
+                # Sentiment Summary
                 if intel.get('sentiment_summary'):
-                    report_lines.append(f"**💭 舆情情绪**: {intel['sentiment_summary']}")
+                    report_lines.append(f"**💭 Sentiment**: {intel['sentiment_summary']}")
                 
-                # 业绩预期
+                # Earnings Outlook
                 if intel.get('earnings_outlook'):
-                    report_lines.append(f"**📊 业绩预期**: {intel['earnings_outlook']}")
+                    report_lines.append(f"**📊 Earnings**: {intel['earnings_outlook']}")
                 
-                # 风险警报（醒目显示）
+                # Risk Alerts
                 risk_alerts = intel.get('risk_alerts', [])
                 if risk_alerts:
                     report_lines.append("")
-                    report_lines.append("**🚨 风险警报**:")
+                    report_lines.append("**🚨 Risk Alerts**:")
                     for alert in risk_alerts:
                         report_lines.append(f"- {alert}")
                 
-                # 利好催化
+                # Positive Catalysts
                 catalysts = intel.get('positive_catalysts', [])
                 if catalysts:
                     report_lines.append("")
-                    report_lines.append("**✨ 利好催化**:")
+                    report_lines.append("**✨ Catalysts**:")
                     for cat in catalysts:
                         report_lines.append(f"- {cat}")
                 
-                # 最新消息
+                # Latest News
                 if intel.get('latest_news'):
                     report_lines.append("")
-                    report_lines.append(f"**📢 最新动态**: {intel['latest_news']}")
+                    report_lines.append(f"**📢 Latest News**: {intel['latest_news']}")
                 
                 report_lines.append("")
             
-            # ========== 核心结论 ==========
+            # ========== Core Conclusion ==========
             core = dashboard.get('core_conclusion', {}) if dashboard else {}
             one_sentence = core.get('one_sentence', result.analysis_summary)
-            time_sense = core.get('time_sensitivity', '本周内')
+            time_sense = core.get('time_sensitivity', 'This Week')
             pos_advice = core.get('position_advice', {})
             
             report_lines.extend([
-                "### 📌 核心结论",
+                "### 📌 Core Conclusion",
                 "",
                 f"**{signal_emoji} {signal_text}** | {result.trend_prediction}",
                 "",
-                f"> **一句话决策**: {one_sentence}",
+                f"> **Verdict**: {one_sentence}",
                 "",
-                f"⏰ **时效性**: {time_sense}",
+                f"⏰ **Timing**: {time_sense}",
                 "",
             ])
             
-            # 持仓分类建议
+            # Position Advice
             if pos_advice:
                 report_lines.extend([
-                    "| 持仓情况 | 操作建议 |",
-                    "|---------|---------|",
-                    f"| 🆕 **空仓者** | {pos_advice.get('no_position', result.operation_advice)} |",
-                    f"| 💼 **持仓者** | {pos_advice.get('has_position', '继续持有')} |",
+                    "| Position | Advice |",
+                    "|----------|--------|",
+                    f"| 🆕 **Empty** | {pos_advice.get('no_position', result.operation_advice)} |",
+                    f"| 💼 **Holding** | {pos_advice.get('has_position', 'Hold')} |",
                     "",
                 ])
             
-            # ========== 宏观信号（Mag 7 专属）==========
+            # ========== Macro Signal (Mag 7 Exclusive) ==========
             macro_signal = dashboard.get('macro_signal', {}) if dashboard else {}
             if macro_signal:
                 risk_indicator = macro_signal.get('risk_appetite_indicator', 'Neutral')
                 risk_emoji = "🟢" if risk_indicator == "Risk-On" else ("🔴" if risk_indicator == "Risk-Off" else "⚪")
                 report_lines.extend([
-                    "### 🌍 宏观信号",
+                    "### 🌍 Macro Signal",
                     "",
-                    f"**市场影响权重**: {macro_signal.get('market_impact_weight', 'N/A')} | **风险偏好**: {risk_emoji} {risk_indicator}",
+                    f"**Market Weight**: {macro_signal.get('market_impact_weight', 'N/A')} | **Risk Appetite**: {risk_emoji} {risk_indicator}",
                     "",
-                    f"**板块共振**: {macro_signal.get('sector_resonance', 'N/A')}",
+                    f"**Sector Resonance**: {macro_signal.get('sector_resonance', 'N/A')}",
                     "",
-                    f"> 💡 *{macro_signal.get('macro_interpretation', '该股走势对宏观环境的信号意义待分析')}*",
+                    f"> 💡 *{macro_signal.get('macro_interpretation', 'Analysis pending')}*",
                     "",
                 ])
             
-            # ========== 数据透视 ==========
+            # ========== Data Perspective ==========
             data_persp = dashboard.get('data_perspective', {}) if dashboard else {}
             if data_persp:
                 trend_data = data_persp.get('trend_status', {})
@@ -688,103 +688,98 @@ class NotificationService:
                 vol_data = data_persp.get('volume_analysis', {})
                 
                 report_lines.extend([
-                    "### 📊 数据透视",
+                    "### 📊 Data Perspective",
                     "",
                 ])
                 
-                # 趋势状态
+                # Trend Status
                 if trend_data:
-                    is_bullish = "✅ 是" if trend_data.get('is_bullish', False) else "❌ 否"
+                    is_bullish = "✅ Yes" if trend_data.get('is_bullish', False) else "❌ No"
                     report_lines.extend([
-                        f"**均线排列**: {trend_data.get('ma_alignment', 'N/A')} | 多头排列: {is_bullish} | 趋势强度: {trend_data.get('trend_score', 'N/A')}/100",
+                        f"**MA Alignment**: {trend_data.get('ma_alignment', 'N/A')} | Bullish: {is_bullish} | Trend Score: {trend_data.get('trend_score', 'N/A')}/100",
                         "",
                     ])
                 
-                # 价格位置
+                # Price Position
                 if price_data:
                     bias_status = price_data.get('bias_status', 'N/A')
-                    bias_emoji = "✅" if bias_status == "安全" else ("⚠️" if bias_status == "警戒" else "🚨")
+                     # simple translations for bias status if possible, but they come from JSON so might be English already if prompt worked
+                    bias_emoji = "✅" if bias_status in ["安全", "Safe"] else ("⚠️" if bias_status in ["警戒", "Caution"] else "🚨")
                     report_lines.extend([
-                        "| 价格指标 | 数值 |",
-                        "|---------|------|",
-                        f"| 当前价 | {price_data.get('current_price', 'N/A')} |",
+                        "| Price Indicator | Value |",
+                        "|----------------|-------|",
+                        f"| Current | {price_data.get('current_price', 'N/A')} |",
                         f"| MA5 | {price_data.get('ma5', 'N/A')} |",
                         f"| MA10 | {price_data.get('ma10', 'N/A')} |",
                         f"| MA20 | {price_data.get('ma20', 'N/A')} |",
-                        f"| 乖离率(MA5) | {price_data.get('bias_ma5', 'N/A')}% {bias_emoji}{bias_status} |",
-                        f"| 支撑位 | {price_data.get('support_level', 'N/A')} |",
-                        f"| 压力位 | {price_data.get('resistance_level', 'N/A')} |",
+                        f"| Bias(MA5) | {price_data.get('bias_ma5', 'N/A')}% {bias_emoji}{bias_status} |",
+                        f"| Support | {price_data.get('support_level', 'N/A')} |",
+                        f"| Resistance | {price_data.get('resistance_level', 'N/A')} |",
                         "",
                     ])
                 
-                # 量能分析
+                # Volume Analysis
                 if vol_data:
                     report_lines.extend([
-                        f"**量能**: 量比 {vol_data.get('volume_ratio', 'N/A')} ({vol_data.get('volume_status', '')}) | 换手率 {vol_data.get('turnover_rate', 'N/A')}%",
+                        f"**Volume**: Ratio {vol_data.get('volume_ratio', 'N/A')} ({vol_data.get('volume_status', '')}) | Turnover {vol_data.get('turnover_rate', 'N/A')}%",
                         f"💡 *{vol_data.get('volume_meaning', '')}*",
                         "",
                     ])
                 
-                # 机构情绪 / 筹码结构（兼容新旧格式）
+                # Institutional Sentiment
                 inst_data = data_persp.get('institutional_sentiment', {}) or data_persp.get('chip_structure', {})
                 if inst_data:
-                    # 新格式：机构情绪（美股）
                     if 'sentiment_health' in inst_data:
                         health = inst_data.get('sentiment_health', 'N/A')
-                        health_emoji = "✅" if health == "健康" else ("⚠️" if health == "中性" else "🚨")
+                        health_emoji = "✅" if health in ["健康", "Healthy"] else ("⚠️" if health in ["中性", "Neutral"] else "🚨")
                         report_lines.extend([
-                            f"**机构情绪**: {inst_data.get('analyst_consensus', 'N/A')} | 资金流向: {inst_data.get('institutional_flow', 'N/A')} {health_emoji}{health}",
+                            f"**Inst. Sentiment**: {inst_data.get('analyst_consensus', 'N/A')} | Flow: {inst_data.get('institutional_flow', 'N/A')} {health_emoji}{health}",
                             "",
                         ])
-                    # 旧格式：筹码结构（A股兼容）
                     else:
-                        chip_health = inst_data.get('chip_health', 'N/A')
-                        chip_emoji = "✅" if chip_health == "健康" else ("⚠️" if chip_health == "一般" else "🚨")
-                        report_lines.extend([
-                            f"**筹码**: 获利比例 {inst_data.get('profit_ratio', 'N/A')} | 平均成本 {inst_data.get('avg_cost', 'N/A')} | 集中度 {inst_data.get('concentration', 'N/A')} {chip_emoji}{chip_health}",
-                            "",
-                        ])
+                         # Legacy Chip Support (Keep minimal or translate if needed, mostly unused for US)
+                        pass
             
             # 舆情情报已移至顶部显示
             
-            # ========== 作战计划 ==========
+            # ========== Battle Plan ==========
             battle = dashboard.get('battle_plan', {}) if dashboard else {}
             if battle:
                 report_lines.extend([
-                    "### 🎯 作战计划",
+                    "### 🎯 Battle Plan",
                     "",
                 ])
                 
-                # 狙击点位
+                # Sniper Points
                 sniper = battle.get('sniper_points', {})
                 if sniper:
                     report_lines.extend([
-                        "**📍 狙击点位**",
+                        "**📍 Sniper Points**",
                         "",
-                        "| 点位类型 | 价格 |",
-                        "|---------|------|",
-                        f"| 🎯 理想买入点 | {sniper.get('ideal_buy', 'N/A')} |",
-                        f"| 🔵 次优买入点 | {sniper.get('secondary_buy', 'N/A')} |",
-                        f"| 🛑 止损位 | {sniper.get('stop_loss', 'N/A')} |",
-                        f"| 🎊 目标位 | {sniper.get('take_profit', 'N/A')} |",
+                        "| Type | Price |",
+                        "|------|-------|",
+                        f"| 🎯 Ideal Buy | {sniper.get('ideal_buy', 'N/A')} |",
+                        f"| 🔵 2nd Buy | {sniper.get('secondary_buy', 'N/A')} |",
+                        f"| 🛑 Stop Loss | {sniper.get('stop_loss', 'N/A')} |",
+                        f"| 🎊 Target | {sniper.get('take_profit', 'N/A')} |",
                         "",
                     ])
                 
-                # 仓位策略
+                # Position Strategy
                 position = battle.get('position_strategy', {})
                 if position:
                     report_lines.extend([
-                        f"**💰 仓位建议**: {position.get('suggested_position', 'N/A')}",
-                        f"- 建仓策略: {position.get('entry_plan', 'N/A')}",
-                        f"- 风控策略: {position.get('risk_control', 'N/A')}",
+                        f"**💰 Position**: {position.get('suggested_position', 'N/A')}",
+                        f"- Entry: {position.get('entry_plan', 'N/A')}",
+                        f"- Risk: {position.get('risk_control', 'N/A')}",
                         "",
                     ])
                 
-                # 检查清单
+                # Checklist
                 checklist = battle.get('action_checklist', []) if battle else []
                 if checklist:
                     report_lines.extend([
-                        "**✅ 检查清单**",
+                        "**✅ Actions**",
                         "",
                     ])
                     for item in checklist:

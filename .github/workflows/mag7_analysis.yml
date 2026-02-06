@@ -1,0 +1,92 @@
+name: 美股 Mag7 日报 (精简版)
+
+on:
+  # 定时触发 - 每天北京时间 07:00 (美股收盘后) -> UTC 23:00 (前一天)
+  schedule:
+    - cron: '0 23 * * 1-5'
+  
+  # 手动触发
+  workflow_dispatch:
+
+jobs:
+  mag7-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 创建必要目录
+        run: |
+          mkdir -p data logs reports
+      
+      - name: 执行美股 Mag7 分析
+        env:
+          # ==========================================
+          # 核心功能开关 (M7 MVP 模式)
+          # ==========================================
+          # 关键：关闭实时行情 (避免 IP 封禁，使用 yfinance 历史收盘价)
+          ENABLE_REALTIME_QUOTE: 'false'
+          # 关键：关闭筹码分布 (A股特有功能，美股不支持)
+          ENABLE_CHIP_DISTRIBUTION: 'false'
+          # 开启大盘复盘 (src/market_analyzer.py 已适配美股逻辑)
+          MARKET_REVIEW_ENABLED: 'true'
+          # 开启单股推送 (分析完一只推一只，防止超时)
+          SINGLE_STOCK_NOTIFY: 'true'
+          # 使用完整仪表盘报告格式
+          REPORT_TYPE: 'full'
+          # Mag 7 股票列表 + 三大指数 ETF
+          STOCK_LIST: 'NVDA,AAPL,MSFT,GOOGL,META,AMZN,TSLA,SPY,QQQ,DIA'
+          
+          # ==========================================
+          # AI 配置 (Gemini / OpenAI)
+          # ==========================================
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: 'gemini-2.5-flash'
+          # 如果没有 Gemini，使用 OpenAI
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          
+          # ==========================================
+          # 通知渠道 (仅 Telegram)
+          # ==========================================
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          
+          # ==========================================
+          # 系统配置
+          # ==========================================
+          LOG_LEVEL: INFO
+          MAX_WORKERS: 1  # 串行执行，最稳
+          
+        run: |
+          echo "=========================================="
+          echo "🚀 Mag 7 美股分析 (MVP Mode)"
+          echo "=========================================="
+          echo "📊 股票列表: $STOCK_LIST"
+          echo "🤖 AI 模型: ${GEMINI_MODEL:-Try OpenAI}"
+          echo ""
+          
+          # 运行主程序
+          python main.py
+          
+      - name: 上传日志与报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mag7-reports-${{ github.run_number }}
+          path: |
+            reports/
+            logs/
+          retention-days: 7
