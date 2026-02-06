@@ -708,11 +708,11 @@ class SearchService:
     
     # 增强搜索关键词模板
     ENHANCED_SEARCH_KEYWORDS = [
-        "{name} 股票 今日 股价",
-        "{name} {code} 最新 行情 走势",
-        "{name} 股票 分析 走势图",
-        "{name} K线 技术分析",
-        "{name} {code} 涨跌 成交量",
+        "{name} stock price today",
+        "{name} {code} latest market trend",
+        "{name} stock analysis chart",
+        "{name} technical analysis K-line",
+        "{name} {code} price change volume",
     ]
     
     def __init__(
@@ -793,7 +793,7 @@ class SearchService:
             query = " ".join(focus_keywords)
         else:
             # 默认主查询：股票名称 + 核心关键词
-            query = f"{stock_name} {stock_code} 股票 最新消息"
+            query = f"{stock_name} {stock_code} stock latest news"
 
         logger.info(f"搜索股票新闻: {stock_name}({stock_code}), query='{query}', 时间范围: 近{search_days}天")
         
@@ -839,7 +839,7 @@ class SearchService:
             SearchResponse 对象
         """
         if event_types is None:
-            event_types = ["年报预告", "减持公告", "业绩快报"]
+            event_types = ["Earnings Report", "Insider Trading", "SEC Filing"]
         
         # 构建针对性查询
         event_query = " OR ".join(event_types)
@@ -894,28 +894,28 @@ class SearchService:
         search_dimensions = [
             {
                 'name': 'latest_news',
-                'query': f"{stock_name} {stock_code} 最新 新闻 重大 事件",
-                'desc': '最新消息'
+                'query': f"{stock_name} {stock_code} latest news major events",
+                'desc': 'Latest News'
             },
             {
                 'name': 'market_analysis',
-                'query': f"{stock_name} 研报 目标价 评级 深度分析",
-                'desc': '机构分析'
+                'query': f"{stock_name} analyst ratings target price deep analysis",
+                'desc': 'Analyst Ratings'
             },
             {
                 'name': 'risk_check', 
-                'query': f"{stock_name} 减持 处罚 违规 诉讼 利空 风险",
-                'desc': '风险排查'
+                'query': f"{stock_name} insider selling sec investigation lawsuit risk factors",
+                'desc': 'Risk Check'
             },
             {
                 'name': 'earnings',
-                'query': f"{stock_name} 业绩预告 财报 营收 净利润 同比增长",
-                'desc': '业绩预期'
+                'query': f"{stock_name} earnings preview financial report revenue growth",
+                'desc': 'Earnings Outlook'
             },
             {
                 'name': 'industry',
-                'query': f"{stock_name} 所在行业 竞争对手 市场份额 行业前景",
-                'desc': '行业分析'
+                'query': f"{stock_name} industry analysis competitors market share",
+                'desc': 'Industry Analysis'
             },
         ]
         
@@ -976,11 +976,13 @@ class SearchService:
             
             # 获取维度描述
             dim_desc = dim_name
-            if dim_name == 'latest_news': dim_desc = '📰 最新消息'
-            elif dim_name == 'market_analysis': dim_desc = '📈 机构分析'
-            elif dim_name == 'risk_check': dim_desc = '⚠️ 风险排查'
-            elif dim_name == 'earnings': dim_desc = '📊 业绩预期'
-            elif dim_name == 'industry': dim_desc = '🏭 行业分析'
+            # 获取维度描述
+            dim_desc = dim_name
+            if dim_name == 'latest_news': dim_desc = '📰 Latest News'
+            elif dim_name == 'market_analysis': dim_desc = '📈 Analyst Ratings'
+            elif dim_name == 'risk_check': dim_desc = '⚠️ Risk Check'
+            elif dim_name == 'earnings': dim_desc = '📊 Earnings Outlook'
+            elif dim_name == 'industry': dim_desc = '🏭 Industry Analysis'
             
             lines.append(f"\n{dim_desc} (来源: {resp.provider}):")
             if resp.success and resp.results:
