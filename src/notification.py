@@ -664,36 +664,44 @@ class NotificationService:
             lines.append("")
 
         # 4. 详细分析 (Technical & Fundamental)
-        pivot = dashboard.get('data_pivot', {}) if dashboard else {}
+        pivot = dashboard.get('data_perspective', {}) if dashboard else {}
         lines.append("### 🔍 Analysis Details")
         lines.append("")
         
         # Technical
-        if pivot.get('technical_signal'):
-            lines.append(f"**📈 Technical**: {pivot['technical_signal']}")
+        trend_status = pivot.get('trend_status', {})
+        if trend_status.get('ma_alignment'):
+            lines.append(f"**📈 Technical**: {trend_status['ma_alignment']}")
         
-        # Fundamental
-        if pivot.get('fundamental_quality'):
-             lines.append(f"**🏢 Fundamental**: {pivot['fundamental_quality']}")
+        # Volume
+        vol_analysis = pivot.get('volume_analysis', {})
+        if vol_analysis.get('volume_status'):
+             lines.append(f"**📊 Volume**: {vol_analysis['volume_status']}")
              
-        # Valuation (if available)
-        if pivot.get('valuation_status'):
-             lines.append(f"**💰 Valuation**: {pivot['valuation_status']}")
+        # Institutional
+        inst_sentiment = pivot.get('institutional_sentiment', {})
+        if inst_sentiment.get('institutional_flow'):
+             lines.append(f"**🏦 Institutional**: {inst_sentiment['institutional_flow']}")
         
         lines.append("")
 
         # 5. 作战计划 (Action Plan) - 最重要
-        plan = dashboard.get('action_plan', {}) if dashboard else {}
+        plan = dashboard.get('battle_plan', {}) if dashboard else {}
+        sniper = plan.get('sniper_points', {})
+        strategy = plan.get('position_strategy', {})
+        
         if plan:
             lines.append("### ⚔️ Action Plan")
             lines.append("")
-            if plan.get('strategy'):
-                lines.append(f"**Strategy**: {plan['strategy']}")
             
-            if plan.get('buy_zone') or plan.get('sell_zone'):
-                if plan.get('buy_zone'): lines.append(f"- **Buy Zone**: {plan['buy_zone']}")
-                if plan.get('sell_zone'): lines.append(f"- **Sell Zone**: {plan['sell_zone']}")
-                if plan.get('stop_loss'): lines.append(f"- **Stop Loss**: {plan['stop_loss']}")
+            if strategy.get('suggested_position'):
+                lines.append(f"**Strategy**: {strategy['suggested_position']}")
+            
+            if sniper:
+                if sniper.get('ideal_buy'): lines.append(f"- **Buy Zone**: {sniper['ideal_buy']}")
+                if sniper.get('secondary_buy'): lines.append(f"- **2nd Buy**: {sniper['secondary_buy']}")
+                if sniper.get('take_profit'): lines.append(f"- **Target**: {sniper['take_profit']}")
+                if sniper.get('stop_loss'): lines.append(f"- **Stop Loss**: {sniper['stop_loss']}")
             else:
                  # Fallback to result fields if dashboard plan is empty
                  if hasattr(result, 'pressure_price') and result.pressure_price:

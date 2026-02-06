@@ -1047,39 +1047,39 @@ class GeminiAnalyzer:
 | 趋势强度 | {trend.get('trend_strength', 0)}/100 | |
 | **乖离率(MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
 | 乖离率(MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
-| 量能状态 | {trend.get('volume_status', '未知')} | {trend.get('volume_trend', '')} |
-| 系统信号 | {trend.get('buy_signal', '未知')} | |
-| 系统评分 | {trend.get('signal_score', 0)}/100 | |
+| Volume Status | {trend.get('volume_status', 'Unknown')} | {trend.get('volume_trend', '')} |
+| System Signal | {trend.get('buy_signal', 'Unknown')} | |
+| System Score | {trend.get('signal_score', 0)}/100 | |
 
-#### 系统分析理由
-**买入理由**：
-{chr(10).join('- ' + r for r in trend.get('signal_reasons', ['无'])) if trend.get('signal_reasons') else '- 无'}
+#### System Analysis Reasons
+**Buy Reasons**:
+{chr(10).join('- ' + r for r in trend.get('signal_reasons', ['None'])) if trend.get('signal_reasons') else '- None'}
 
-**风险因素**：
-{chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
+**Risk Factors**:
+{chr(10).join('- ' + r for r in trend.get('risk_factors', ['None'])) if trend.get('risk_factors') else '- None'}
 """
         
         # 添加昨日对比数据
         if 'yesterday' in context:
             volume_change = context.get('volume_change_ratio', 'N/A')
             prompt += f"""
-### 量价变化
-- 成交量较昨日变化：{volume_change}倍
-- 价格较昨日变化：{context.get('price_change_ratio', 'N/A')}%
+### Volume & Price Change
+- Volume Change vs Yesterday: {volume_change}x
+- Price Change vs Yesterday: {context.get('price_change_ratio', 'N/A')}%
 """
         
         # 添加新闻搜索结果（重点区域）
         prompt += """
 ---
 
-## 📰 舆情情报
+## 📰 News Intel
 """
         if news_context:
             prompt += f"""
-以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
-1. 🚨 **风险警报**：减持、处罚、利空
-2. 🎯 **利好催化**：业绩、合同、政策
-3. 📊 **业绩预期**：年报预告、业绩快报
+Below are search results for **{stock_name}({code})** in the last 7 days. Please focus on:
+1. 🚨 **Risk Alerts**: Selling, penalties, bad news
+2. 🎯 **Positive Catalysts**: Earnings, contracts, policies
+3. 📊 **Earnings Outlook**: Pre-announcements, reports
 
 ```
 {news_context}
@@ -1087,45 +1087,46 @@ class GeminiAnalyzer:
 """
         else:
             prompt += """
-未搜索到该股票近期的相关新闻。请主要依据技术面数据进行分析。
+No recent news found. Please analyze based on technical data.
 """
 
         # 注入缺失数据警告
         if context.get('data_missing'):
             prompt += """
-⚠️ **数据缺失警告**
-由于接口限制，当前无法获取完整的实时行情和技术指标数据。
-请 **忽略上述表格中的 N/A 数据**，重点依据 **【📰 舆情情报】** 中的新闻进行基本面和情绪面分析。
-在回答技术面问题（如均线、乖离率）时，请直接说明“数据缺失，无法判断”，**严禁编造数据**。
+⚠️ **Data Missing Warning**
+Due to API limits, real-time quote and technical indicators are incomplete.
+Please **IGNORE N/A data in tables**, and focus on **【📰 News Intel】** for fundamental and sentiment analysis.
+For technical questions (like MA, Bias), please state "Data missing, cannot judge", **DO NOT fabricate data**.
 """
         
         # 明确的输出要求
         prompt += f"""
 ---
 
-## ✅ 分析任务
+## ✅ Analysis Task
 
-请为 **{stock_name}({code})** 生成【决策仪表盘】，严格按照 JSON 格式输出。
+Please generate a **Decision Dashboard** for **{stock_name}({code})**, output strictly in JSON format.
 
-### ⚠️ 重要：股票名称确认
-如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
+### ⚠️ IMPORTANT: Stock Name Confirmation
+If the stock name above is shown as "Stock{code}" or incorrect, please **explicitly output the correct full English name** in the analysis start.
 
-### 重点关注（必须明确回答）：
-1. ❓ 是否满足 MA5>MA10>MA20 多头排列？
-2. ❓ 当前乖离率是否在安全范围内（<8%）？—— 超过8%需标注"谨慎追高"
-3. ❓ 量能是否配合（缩量回调/放量突破）？
-4. ❓ 机构情绪是否健康？（分析师评级、展望变化）
-5. ❓ 消息面有无重大利空？（财报暴雷、监管调查、高管抛售等）
+### Key Focus (Must Answer Explicitly):
+1. ❓ Is MA5 > MA10 > MA20 bullish alignment satisfied?
+2. ❓ Is the current bias within safe range (<8%)? - If >8%, mark as "Caution High".
+3. ❓ Is volume supportive (shrinking pullback / expanding breakout)?
+4. ❓ Is institutional sentiment healthy? (Analyst ratings, outlook changes)
+5. ❓ Are there major negatives? (Earnings miss, regulatory probe, insider selling)
 
-### 宏观决策仪表盘要求：
-- **股票名称**：必须输出正确的名称（如"NVIDIA"而非"股票NVDA"）
-- **核心结论**：一句话说清该买/该卖/该等
-- **宏观信号**：该股走势对整体市场的信号意义
-- **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
-- **具体狙击点位**：买入价、止损价、目标价（精确到分）
-- **检查清单**：每项用 ✅/⚠️/❌ 标记
+### Macro Decision Dashboard Requirements:
+- **Stock Name**: Must output correct English name (e.g., "NVIDIA" not "StockNVDA").
+- **Core Conclusion**: One sentence on Buy/Sell/Wait.
+- **Macro Signal**: Significance of this stock's trend for the overall market.
+- **Position Advice**: Advice for those with no position vs. those with position.
+- **Sniper Points**: Buy Price, Stop Loss, Target Price (Exact numbers).
+- **Checklist**: Mark each with ✅/⚠️/❌.
 
-请输出完整的 JSON 格式决策仪表盘。"""
+**CRITICAL: ALL OUTPUT MUST BE IN ENGLISH.**
+Please output the complete JSON format Decision Dashboard."""
         
         return prompt
     
@@ -1261,32 +1262,32 @@ class GeminiAnalyzer:
         code: str, 
         name: str
     ) -> AnalysisResult:
-        """从纯文本响应中尽可能提取分析信息"""
-        # 尝试识别关键词来判断情绪
+        """Extract analysis info from plain text response (fallback)"""
+        # Try to identify sentiment keywords
         sentiment_score = 50
-        trend = '震荡'
-        advice = '持有'
+        trend = 'Neutral'
+        advice = 'Hold'
         
         text_lower = response_text.lower()
         
-        # 简单的情绪识别
-        positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy']
-        negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell']
+        # Simple sentiment detection
+        positive_keywords = ['bullish', 'buy', 'strong', 'breakout', 'positive', 'add', 'growth']
+        negative_keywords = ['bearish', 'sell', 'weak', 'breakdown', 'negative', 'reduce', 'drop']
         
         positive_count = sum(1 for kw in positive_keywords if kw in text_lower)
         negative_count = sum(1 for kw in negative_keywords if kw in text_lower)
         
         if positive_count > negative_count + 1:
             sentiment_score = 65
-            trend = '看多'
-            advice = '买入'
+            trend = 'Bullish'
+            advice = 'Buy'
         elif negative_count > positive_count + 1:
             sentiment_score = 35
-            trend = '看空'
-            advice = '卖出'
+            trend = 'Bearish'
+            advice = 'Sell'
         
-        # 截取前500字符作为摘要
-        summary = response_text[:500] if response_text else '无分析结果'
+        # Take first 500 chars as summary
+        summary = response_text[:500] if response_text else 'No analysis result'
         
         return AnalysisResult(
             code=code,
@@ -1294,10 +1295,10 @@ class GeminiAnalyzer:
             sentiment_score=sentiment_score,
             trend_prediction=trend,
             operation_advice=advice,
-            confidence_level='低',
+            confidence_level='Low',
             analysis_summary=summary,
-            key_points='JSON解析失败，仅供参考',
-            risk_warning='分析结果可能不准确，建议结合其他信息判断',
+            key_points='JSON parsing failed, for reference only',
+            risk_warning='Analysis result may be inaccurate, please cross-check.',
             raw_response=response_text,
             success=True,
         )
