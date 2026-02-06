@@ -59,6 +59,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           
           # ==========================================
+          # 搜索配置 (Tavily / Bocha)
+          # ==========================================
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          
+          # ==========================================
           # 通知渠道 (仅 Telegram)
           # ==========================================
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
