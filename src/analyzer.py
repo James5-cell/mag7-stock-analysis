@@ -1076,10 +1076,11 @@ class GeminiAnalyzer:
 """
         if news_context:
             prompt += f"""
-Below are search results for **{stock_name}({code})** in the last 7 days. Please focus on:
-1. 🚨 **Risk Alerts**: Selling, penalties, bad news
-2. 🎯 **Positive Catalysts**: Earnings, contracts, policies
-3. 📊 **Earnings Outlook**: Pre-announcements, reports
+Below are search results for **{stock_name}({code})**. Please focus on:
+1. 仅保留 **近 7 天** 的新增事件作为风险或催化
+2. 超过 7 天但仍有参考价值的内容，降级为 `background_context`
+3. 风险项请按 **高 / 中 / 低** 分级，优先识别监管、诉讼、财报失误、指引下修、板块退潮
+4. 如果新闻不足，请明确写 "新闻不足，按技术面为主"
 
 ```
 {news_context}
@@ -1087,7 +1088,7 @@ Below are search results for **{stock_name}({code})** in the last 7 days. Please
 """
         else:
             prompt += """
-No recent news found. Please analyze based on technical data.
+No recent news found. 请按技术面为主，并在 intelligence 中明确标注新闻不足。
 """
 
         # 注入缺失数据警告
@@ -1111,21 +1112,36 @@ Please generate a **Decision Dashboard** for **{stock_name}({code})**, output st
 If the stock name above is shown as "Stock{code}" or incorrect, please **explicitly output the correct full English name** in the analysis start.
 
 ### Key Focus (Must Answer Explicitly):
-1. ❓ Is MA5 > MA10 > MA20 bullish alignment satisfied?
-2. ❓ Is the current bias within safe range (<8%)? - If >8%, mark as "Caution High".
-3. ❓ Is volume supportive (shrinking pullback / expanding breakout)?
-4. ❓ Is institutional sentiment healthy? (Analyst ratings, outlook changes)
-5. ❓ Are there major negatives? (Earnings miss, regulatory probe, insider selling)
+1. Is MA5 > MA10 > MA20 bullish alignment satisfied?
+2. Is the current bias within safe range (<8%)? If >8%, mark as caution.
+3. Is volume supportive (shrinking pullback / expanding breakout)?
+4. Is institutional sentiment healthy? (Analyst ratings, outlook changes)
+5. Are there major negatives? (earnings miss, regulatory probe, insider selling)
 
-### Macro Decision Dashboard Requirements:
-- **Stock Name**: Must output correct English name (e.g., "NVIDIA" not "StockNVDA").
-- **Core Conclusion**: One sentence on Buy/Sell/Wait.
-- **Macro Signal**: Significance of this stock's trend for the overall market.
-- **Position Advice**: Advice for those with no position vs. those with position.
-- **Sniper Points**: Buy Price, Stop Loss, Target Price (Exact numbers).
-- **Checklist**: Mark each with ✅/⚠️/❌.
+### Language & Style Requirements:
+- JSON keys stay in English for parser compatibility.
+- All narrative values must be **Simplified Chinese**, except ticker / exact numbers / official English company name.
+- Keep every text field concise, practical, and Telegram-friendly.
+- `dashboard.core_conclusion.one_sentence`: <= 28 Chinese chars.
+- `dashboard.macro_signal.sector_resonance`: <= 18 Chinese chars, explain whether Mag7 / semi / AI / cloud is resonating.
+- `dashboard.intelligence.sentiment_summary`: <= 30 Chinese chars.
+- `analysis_summary`: <= 60 Chinese chars, no long paragraphs.
+- `key_points`: output 3 short Chinese points, comma separated.
 
-**CRITICAL: ALL OUTPUT MUST BE IN ENGLISH.**
+### Intelligence Requirements:
+- `risk_alerts`: output 0-3 items in format `高｜YYYY-MM-DD｜事件` / `中｜YYYY-MM-DD｜事件` / `低｜YYYY-MM-DD｜事件`
+- Only keep **last 7 days** new risks in `risk_alerts`
+- Old but relevant items move to optional `background_context`
+- `positive_catalysts`: at most 2 items, concise Chinese
+- If recent news is insufficient, explicitly say so instead of fabricating
+
+### Execution Requirements:
+- `operation_advice` must use Chinese: 买入 / 加仓 / 持有 / 观望 / 减仓 / 卖出
+- `trend_prediction` should prefer Chinese: 强烈看多 / 看多 / 震荡 / 看空 / 强烈看空
+- `confidence_level` should prefer Chinese: 高 / 中 / 低
+- `battle_plan.sniper_points` should provide exact prices when possible; if data missing, use `待确认`
+- Position advice must distinguish no position vs existing position
+
 Please output the complete JSON format Decision Dashboard."""
         
         return prompt
@@ -1265,8 +1281,8 @@ Please output the complete JSON format Decision Dashboard."""
         """Extract analysis info from plain text response (fallback)"""
         # Try to identify sentiment keywords
         sentiment_score = 50
-        trend = 'Neutral'
-        advice = 'Hold'
+        trend = '震荡'
+        advice = '持有'
         
         text_lower = response_text.lower()
         
@@ -1279,12 +1295,12 @@ Please output the complete JSON format Decision Dashboard."""
         
         if positive_count > negative_count + 1:
             sentiment_score = 65
-            trend = 'Bullish'
-            advice = 'Buy'
+            trend = '看多'
+            advice = '买入'
         elif negative_count > positive_count + 1:
             sentiment_score = 35
-            trend = 'Bearish'
-            advice = 'Sell'
+            trend = '看空'
+            advice = '卖出'
         
         # Take first 500 chars as summary
         summary = response_text[:800] if response_text else 'No analysis result'
@@ -1312,11 +1328,11 @@ Please output the complete JSON format Decision Dashboard."""
             sentiment_score=sentiment_score,
             trend_prediction=trend,
             operation_advice=advice,
-            confidence_level='Low',
+            confidence_level='低',
             dashboard=fallback_dashboard, # Populate fallback dashboard
             analysis_summary=summary,
-            key_points='JSON parsing failed, for reference only',
-            risk_warning='Analysis result may be inaccurate, please cross-check.',
+            key_points='JSON 解析失败，仅供参考',
+            risk_warning='结构化结果解析失败，请人工复核。',
             raw_response=response_text,
             success=True,
         )

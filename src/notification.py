@@ -20,7 +20,7 @@ import json
 import smtplib
 import re
 import markdown2
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import List, Dict, Any, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -531,6 +531,338 @@ class NotificationService:
             return ('Sell', '🔴', 'Sell')
         else:
             return ('Wait', '⚪', 'Wait')
+
+    def _get_cn_signal_level(self, result: AnalysisResult) -> tuple:
+        """返回中文信号等级、emoji 和风险偏好标签"""
+        advice = result.operation_advice
+        score = result.sentiment_score
+
+        if advice in ['强烈买入', 'Strong Buy'] or score >= 80:
+            return ('强势看多', '💚', 'Risk-On')
+        if advice in ['买入', '加仓', 'Buy', 'Add'] or score >= 65:
+            return ('偏多', '🟢', 'Risk-On')
+        if advice in ['持有', 'Hold'] or 55 <= score < 65:
+            return ('持有', '🟡', 'Neutral')
+        if advice in ['观望', 'Wait'] or 45 <= score < 55:
+            return ('观望', '⚪', 'Neutral')
+        if advice in ['减仓', 'Reduce'] or 35 <= score < 45:
+            return ('偏空', '🟠', 'Risk-Off')
+        if advice in ['卖出', '强烈卖出', 'Sell', 'Strong Sell'] or score < 35:
+            return ('看空', '🔴', 'Risk-Off')
+        return ('观望', '⚪', 'Neutral')
+
+    def _get_stock_display_name(self, result: AnalysisResult) -> str:
+        """返回更稳妥的股票展示名称"""
+        if result.name and not result.name.startswith('股票'):
+            return result.name
+        return f'股票{result.code}'
+
+    def _compact_text(self, text: Optional[str], max_len: int = 28) -> str:
+        """压缩文本长度，适配 Telegram 快读场景"""
+        if not text:
+            return ""
+        cleaned = re.sub(r'\s+', ' ', str(text)).strip(" -:|，。；")
+        if len(cleaned) <= max_len:
+            return cleaned
+        return cleaned[: max_len - 1].rstrip(" ,，。；") + "…"
+
+    def _extract_price_token(self, raw_value: Any, stock_code: str) -> str:
+        """从作战计划文本中提取价格，缺失时回退为待确认"""
+        if raw_value in (None, "", "-", "N/A", "待确认"):
+            return "待确认"
+
+        text = str(raw_value)
+        match = re.search(r'(\d+(?:\.\d+)?)', text.replace(',', ''))
+        if not match:
+            return self._compact_text(text, 14) or "待确认"
+
+        number = match.group(1)
+        return f"${number}" if stock_code.isalpha() else number
+
+    def _extract_date_from_text(self, text: str) -> Optional[date]:
+        """尝试从文本中提取日期，用于筛选近 7 日风险"""
+        if not text:
+            return None
+
+        patterns = [
+            r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})',
+            r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            try:
+                groups = [int(part) for part in match.groups()]
+                if len(str(groups[0])) == 4:
+                    year, month, day = groups
+                else:
+                    month, day, year = groups
+                return datetime(year, month, day).date()
+            except ValueError:
+                continue
+
+        return None
+
+    def _classify_risk_level(self, text: str) -> str:
+        """对风险项做高/中/低分级，优先尊重模型已有前缀"""
+        cleaned = (text or "").strip()
+        if cleaned.startswith('高｜'):
+            return '高'
+        if cleaned.startswith('中｜'):
+            return '中'
+        if cleaned.startswith('低｜'):
+            return '低'
+
+        lowered = cleaned.lower()
+        high_keywords = [
+            'investigation', 'lawsuit', 'antitrust', 'probe', 'sec', 'fraud',
+            'earnings miss', 'guidance cut', 'downgrade', '监管', '调查', '诉讼',
+            '罚款', '指引下修', '业绩不及预期', '暴跌', '破位'
+        ]
+        medium_keywords = [
+            'volatility', 'earnings', 'fed', 'lockup', 'competition', 'valuation',
+            'macro', 'tariff', '波动', '财报', '估值', '竞争', '利率', '关税', '承压'
+        ]
+
+        if any(keyword in lowered for keyword in high_keywords):
+            return '高'
+        if any(keyword in lowered for keyword in medium_keywords):
+            return '中'
+        return '低'
+
+    def _collect_risk_context(self, result: AnalysisResult) -> tuple:
+        """提取近 7 日风险与背景项"""
+        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        intel = dashboard.get('intelligence', {}) if dashboard else {}
+
+        buckets = {'高': [], '中': [], '低': []}
+        background = []
+
+        risk_items = intel.get('risk_alerts', []) if intel else []
+        if isinstance(risk_items, str):
+            risk_items = [risk_items]
+
+        background_items = intel.get('background_context', []) if intel else []
+        if isinstance(background_items, str):
+            background_items = [background_items]
+
+        latest_news = intel.get('latest_news', []) if intel else []
+        if isinstance(latest_news, str):
+            latest_news = [latest_news]
+
+        all_items = list(risk_items)
+        for news in latest_news:
+            lowered = news.lower()
+            if any(
+                keyword in lowered for keyword in [
+                    'risk', 'investigation', 'lawsuit', 'downgrade', '监管', '调查', '诉讼', '风险', '罚款'
+                ]
+            ):
+                all_items.append(news)
+
+        cutoff_date = datetime.now().date() - timedelta(days=7)
+        for item in all_items:
+            if not item:
+                continue
+            item_date = self._extract_date_from_text(str(item))
+            cleaned = re.sub(r'^(高｜|中｜|低｜)', '', str(item)).strip()
+            compact = self._compact_text(cleaned, 24)
+            if item_date and item_date < cutoff_date:
+                if compact:
+                    background.append(compact)
+                continue
+            level = self._classify_risk_level(str(item))
+            if compact and compact not in buckets[level]:
+                buckets[level].append(compact)
+
+        for item in background_items:
+            compact = self._compact_text(str(item), 24)
+            if compact and compact not in background:
+                background.append(compact)
+
+        has_news_context = bool(risk_items or latest_news or background_items)
+        return buckets, background, has_news_context
+
+    def _format_risk_line(self, result: AnalysisResult) -> str:
+        """按高/中/低输出近 7 日风险，旧闻降级为背景"""
+        buckets, background, has_news_context = self._collect_risk_context(result)
+
+        parts = []
+        for level in ('高', '中', '低'):
+            if buckets[level]:
+                parts.append(f"{level}｜{'；'.join(buckets[level][:2])}")
+
+        if not parts:
+            if has_news_context:
+                fallback = self._compact_text(result.risk_warning, 24)
+                if fallback:
+                    parts.append(f"中｜{fallback}")
+                else:
+                    parts.append("低｜近7日未见新增硬风险")
+            else:
+                parts.append("低｜新闻不足，按技术面跟踪")
+
+        if background:
+            parts.append(f"背景｜{background[0]}")
+
+        return f"风险(近7日)：{'；'.join(parts)}"
+
+    def _build_reason_line(self, result: AnalysisResult) -> str:
+        """组合 1-3 条核心理由"""
+        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        pivot = dashboard.get('data_perspective', {}) if dashboard else {}
+        intel = dashboard.get('intelligence', {}) if dashboard else {}
+
+        reasons = []
+
+        trend_status = pivot.get('trend_status', {})
+        ma_alignment = self._compact_text(trend_status.get('ma_alignment'), 18)
+        if ma_alignment:
+            reasons.append(ma_alignment)
+
+        price_position = pivot.get('price_position', {})
+        bias_ma5 = price_position.get('bias_ma5')
+        if isinstance(bias_ma5, (int, float)):
+            status = "未过热" if abs(bias_ma5) <= 8 else "偏热"
+            reasons.append(f"MA5乖离{bias_ma5:+.1f}% {status}")
+        elif price_position.get('bias_status'):
+            reasons.append(self._compact_text(f"乖离状态{price_position['bias_status']}", 18))
+
+        volume_analysis = pivot.get('volume_analysis', {})
+        if volume_analysis.get('volume_meaning'):
+            reasons.append(self._compact_text(volume_analysis['volume_meaning'], 18))
+        elif volume_analysis.get('volume_status'):
+            reasons.append(self._compact_text(f"量能{volume_analysis['volume_status']}", 18))
+
+        catalysts = intel.get('positive_catalysts', []) if intel else []
+        if isinstance(catalysts, str):
+            catalysts = [catalysts]
+        if catalysts:
+            reasons.append(self._compact_text(catalysts[0], 18))
+        elif intel.get('sentiment_summary'):
+            reasons.append(self._compact_text(intel['sentiment_summary'], 18))
+
+        if not reasons and result.buy_reason:
+            reasons.append(self._compact_text(result.buy_reason, 18))
+        if not reasons and result.analysis_summary:
+            reasons.append(self._compact_text(result.analysis_summary, 18))
+
+        unique_reasons = []
+        for reason in reasons:
+            if reason and reason not in unique_reasons:
+                unique_reasons.append(reason)
+
+        numbered = [f"{idx}) {reason}" for idx, reason in enumerate(unique_reasons[:3], start=1)]
+        return f"理由：{' '.join(numbered)}" if numbered else "理由：技术与消息面信息不足，先观察。"
+
+    def _format_execution_line(self, result: AnalysisResult) -> str:
+        """统一高亮进场/止损/目标价"""
+        sniper = result.get_sniper_points() if hasattr(result, 'get_sniper_points') else {}
+        entry = self._extract_price_token(sniper.get('ideal_buy'), result.code)
+        stop = self._extract_price_token(sniper.get('stop_loss'), result.code)
+        target = self._extract_price_token(sniper.get('take_profit'), result.code)
+        return f"🎯 **进场 {entry}** | 🛑 **止损 {stop}** | 🎯 **目标 {target}**"
+
+    def _format_position_line(self, result: AnalysisResult) -> str:
+        """简化空仓/持仓建议"""
+        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        core = dashboard.get('core_conclusion', {}) if dashboard else {}
+        pos_advice = core.get('position_advice', {}) if core else {}
+
+        no_position = self._compact_text(pos_advice.get('no_position', result.operation_advice), 18)
+        has_position = self._compact_text(pos_advice.get('has_position', '继续跟踪'), 18)
+        return f"执行：空仓{no_position or '等回踩'}；持仓{has_position or '守纪律'}"
+
+    def _format_stock_compact_block(self, result: AnalysisResult, include_footer: bool = False) -> str:
+        """生成适配 Telegram 的 5-6 行个股块"""
+        signal_text, signal_emoji, _ = self._get_cn_signal_level(result)
+        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        core = dashboard.get('core_conclusion', {}) if dashboard else {}
+
+        stock_name = self._get_stock_display_name(result)
+        conclusion = self._compact_text(core.get('one_sentence') or result.analysis_summary, 32)
+        if not conclusion:
+            conclusion = "信息不足，暂以技术面跟踪。"
+
+        lines = [
+            f"## {signal_emoji} {stock_name} ({result.code})",
+            f"信号：{signal_text} | 结论：{conclusion}",
+            self._build_reason_line(result),
+            self._format_risk_line(result),
+            self._format_execution_line(result),
+            self._format_position_line(result),
+        ]
+
+        if include_footer:
+            lines.extend([
+                "",
+                f"*生成时间：{datetime.now().strftime('%H:%M:%S')}*",
+                "---",
+            ])
+
+        return "\n".join(lines)
+
+    def _build_market_overview(self, results: List[AnalysisResult], report_date: str) -> List[str]:
+        """生成 Mag7 总览头部"""
+        if not results:
+            return [f"# 📊 {report_date} Mag7 行动仪表板", "", "暂无可用结果。", ""]
+
+        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        buy_count = sum(1 for r in results if r.operation_advice in ['买入', '加仓', '强烈买入'])
+        sell_count = sum(1 for r in results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
+        hold_count = len(results) - buy_count - sell_count
+        avg_score = sum(r.sentiment_score for r in results) / len(results)
+
+        if avg_score >= 72 and buy_count >= max(1, len(results) // 2):
+            overall_signal = "偏强，Risk-On"
+        elif avg_score >= 60:
+            overall_signal = "偏多，轮动向上"
+        elif avg_score >= 45:
+            overall_signal = "震荡，分化明显"
+        else:
+            overall_signal = "偏弱，Risk-Off"
+
+        resonance_pool = []
+        for result in sorted_results:
+            macro_signal = result.get_macro_signal() if hasattr(result, 'get_macro_signal') else {}
+            resonance = self._compact_text(macro_signal.get('sector_resonance'), 16)
+            if resonance:
+                resonance_pool.append(resonance)
+
+        unique_resonance = []
+        for item in resonance_pool:
+            if item not in unique_resonance:
+                unique_resonance.append(item)
+        sector_resonance = " / ".join(unique_resonance[:2]) if unique_resonance else "AI/云/半导体分化轮动"
+
+        high_risk_count = 0
+        for result in results:
+            buckets, _, _ = self._collect_risk_context(result)
+            if buckets['高']:
+                high_risk_count += 1
+
+        if high_risk_count >= 2 or sell_count >= max(1, len(results) // 3):
+            risk_level = "高"
+        elif high_risk_count >= 1 or sell_count > 0 or avg_score < 60:
+            risk_level = "中"
+        else:
+            risk_level = "低"
+
+        leaders = " / ".join(r.code for r in sorted_results[:2])
+        laggards = " / ".join(r.code for r in sorted(results, key=lambda x: x.sentiment_score)[:2])
+
+        return [
+            f"# 📊 {report_date} Mag7 行动仪表板",
+            "",
+            f"总体信号：**{overall_signal}** | 板块共振：**{sector_resonance}** | 风险等级：**{risk_level}**",
+            f"分布：🟢 {buy_count} | 🟡 {hold_count} | 🔴 {sell_count} | 均分 {avg_score:.0f}",
+            f"关注方向：强势看 {leaders}；承压看 {laggards}",
+            "",
+            "---",
+            "",
+        ]
     
     def generate_dashboard_report(
         self,
@@ -552,50 +884,99 @@ class NotificationService:
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
 
-        # 按评分排序（高分在前）
         sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        report_lines = self._build_market_overview(sorted_results, report_date)
 
-        # 统计信息
-        buy_count = sum(1 for r in results if r.operation_advice in ['买入', '加仓', '强烈买入'])
-        sell_count = sum(1 for r in results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
-        hold_count = sum(1 for r in results if r.operation_advice in ['持有', '观望'])
+        for idx, result in enumerate(sorted_results):
+            report_lines.append(self._format_stock_compact_block(result, include_footer=False))
+            if idx < len(sorted_results) - 1:
+                report_lines.extend(["", "---", ""])
 
-        report_lines = [
-            f"# 🎯 {report_date} Decision Dashboard",
-            "",
-            f"> Analyzed **{len(results)}** stocks | 🟢Buy:{buy_count} 🟡Wait:{hold_count} 🔴Sell:{sell_count}",
-            "",
-        ]
-
-        # === 新增：分析结果摘要 (Issue #112) ===
-        if results:
-            report_lines.extend([
-                "## 📊 Analysis Summary",
-                "",
-            ])
-            for r in sorted_results:
-                emoji = r.get_emoji()
-                report_lines.append(
-                    f"{emoji} **{r.name}({r.code})**: {r.operation_advice} | "
-                    f"Score {r.sentiment_score} | {r.trend_prediction}"
-                )
-            report_lines.extend([
-                "",
-                "---",
-                "",
-            ])
-
-        # 逐个股票的决策仪表盘
-        for result in sorted_results:
-            report_lines.append(self.generate_full_single_stock_report(result, is_aggregated=True))
-
-        # 底部信息（去除免责声明）
         report_lines.extend([
             "",
             f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
-        
+
         return "\n".join(report_lines)
+
+    def generate_telegram_report(
+        self,
+        results: List[AnalysisResult],
+        report_date: Optional[str] = None
+    ) -> str:
+        """生成 Telegram 专用汇总报告"""
+        return self.generate_dashboard_report(results, report_date=report_date)
+
+    def generate_telegram_overview(
+        self,
+        results: List[AnalysisResult],
+        report_date: Optional[str] = None
+    ) -> str:
+        """生成 Telegram 首页总览消息"""
+        if report_date is None:
+            report_date = datetime.now().strftime('%Y-%m-%d')
+
+        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        lines = self._build_market_overview(sorted_results, report_date)
+        while lines and lines[-1] in ("", "---"):
+            lines.pop()
+
+        if sorted_results:
+            lines.extend([
+                "",
+                "目录索引：",
+            ])
+            for idx, result in enumerate(sorted_results, start=1):
+                signal_text, signal_emoji, _ = self._get_cn_signal_level(result)
+                stock_name = self._get_stock_display_name(result)
+                lines.append(
+                    f"{idx}. {signal_emoji} {result.code} {stock_name} | {signal_text}"
+                )
+
+        return "\n".join(lines).strip()
+
+    def generate_telegram_report_messages(
+        self,
+        results: List[AnalysisResult],
+        report_date: Optional[str] = None
+    ) -> List[str]:
+        """生成 Telegram 多消息序列：首页总览 + 每只股票一条"""
+        if not results:
+            return [self.generate_telegram_overview(results, report_date=report_date)]
+
+        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        messages = [self.generate_telegram_overview(sorted_results, report_date=report_date)]
+        messages.extend(
+            self.generate_telegram_single_stock_report(result)
+            for result in sorted_results
+        )
+        return messages
+
+    def send_telegram_report(
+        self,
+        results: List[AnalysisResult],
+        report_date: Optional[str] = None
+    ) -> bool:
+        """按多消息序列发送 Telegram 报告"""
+        if not self._is_telegram_configured():
+            logger.warning("Telegram 配置不完整，跳过推送")
+            return False
+
+        import time
+
+        messages = self.generate_telegram_report_messages(results, report_date=report_date)
+        success = False
+        for idx, message in enumerate(messages, start=1):
+            logger.info(f"发送 Telegram 报告消息 {idx}/{len(messages)}...")
+            if self.send_to_telegram(message):
+                success = True
+            if idx < len(messages):
+                time.sleep(1)
+        return success
+
+    def generate_telegram_single_stock_report(self, result: AnalysisResult) -> str:
+        """生成 Telegram 专用单股报告"""
+        return self._format_stock_compact_block(result, include_footer=True)
 
     def generate_full_single_stock_report(self, result: AnalysisResult, is_aggregated: bool = False) -> str:
         """
@@ -605,130 +986,7 @@ class NotificationService:
             result: 分析结果对象
             is_aggregated: 是否作为汇总报告的一部分 (如果是，则不显示重复的头部信息)
         """
-        signal_text, signal_emoji, signal_tag = self._get_signal_level(result)
-        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-        
-        # 股票名称
-        stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
-        
-        lines = []
-        
-        # 1. 标题头 (如果是单独推送，加个醒目的 Header)
-        lines.extend([
-            f"## {signal_emoji} {stock_name} ({result.code})",
-            "",
-            f"**Signal**: {signal_tag} | **Score**: {result.sentiment_score} | **Trend**: {result.trend_prediction}",
-            "",
-        ])
-        
-        # 2. 核心结论 (One Sentence)
-        core = dashboard.get('core_conclusion', {}) if dashboard else {}
-        
-        # Fallback: If dashboard is empty, show analysis summary
-        if not dashboard and hasattr(result, 'analysis_summary') and result.analysis_summary:
-            lines.extend([
-                "> **Note**: Detailed structured analysis parsing failed.",
-                "",
-                f"{result.analysis_summary}",
-                "",
-            ])
-        elif core and core.get('one_sentence'):
-             lines.extend([
-                f"> {core['one_sentence']}",
-                "",
-            ])
-
-        # 3. 关键情报 (Intelligence)
-        intel = dashboard.get('intelligence', {}) if dashboard else {}
-        if intel:
-            lines.extend([
-                "### 📰 Intel Overview",
-                "",
-            ])
-            # Sentiment Summary
-            if intel.get('sentiment_summary'):
-                lines.append(f"**💭 Sentiment**: {intel['sentiment_summary']}")
-            # Earnings
-            if intel.get('earnings_outlook'):
-                lines.append(f"**📊 Earnings**: {intel['earnings_outlook']}")
-            
-            # Risk Alerts
-            risk_alerts = intel.get('risk_alerts', [])
-            if risk_alerts:
-                lines.append("")
-                lines.append("**🚨 Risk Alerts**:")
-                for alert in risk_alerts:
-                    lines.append(f"- {alert}")
-            
-            # Latest News (Limit 2)
-            if intel.get('latest_news'):
-                lines.append("")
-                # 如果 news 是列表
-                if isinstance(intel['latest_news'], list):
-                     lines.append("**📢 Top News**:")
-                     for i, news in enumerate(intel['latest_news'][:2]):
-                         lines.append(f"- {news}")
-                else:
-                     lines.append(f"**📢 Latest News**: {intel['latest_news']}")
-            lines.append("")
-
-        # 4. 详细分析 (Technical & Fundamental)
-        pivot = dashboard.get('data_perspective', {}) if dashboard else {}
-        lines.append("### 🔍 Analysis Details")
-        lines.append("")
-        
-        # Technical
-        trend_status = pivot.get('trend_status', {})
-        if trend_status.get('ma_alignment'):
-            lines.append(f"**📈 Technical**: {trend_status['ma_alignment']}")
-        
-        # Volume
-        vol_analysis = pivot.get('volume_analysis', {})
-        if vol_analysis.get('volume_status'):
-             lines.append(f"**📊 Volume**: {vol_analysis['volume_status']}")
-             
-        # Institutional
-        inst_sentiment = pivot.get('institutional_sentiment', {})
-        if inst_sentiment.get('institutional_flow'):
-             lines.append(f"**🏦 Institutional**: {inst_sentiment['institutional_flow']}")
-        
-        lines.append("")
-
-        # 5. 作战计划 (Action Plan) - 最重要
-        plan = dashboard.get('battle_plan', {}) if dashboard else {}
-        sniper = plan.get('sniper_points', {})
-        strategy = plan.get('position_strategy', {})
-        
-        if plan:
-            lines.append("### ⚔️ Action Plan")
-            lines.append("")
-            
-            if strategy.get('suggested_position'):
-                lines.append(f"**Strategy**: {strategy['suggested_position']}")
-            
-            if sniper:
-                if sniper.get('ideal_buy'): lines.append(f"- **Buy Zone**: {sniper['ideal_buy']}")
-                if sniper.get('secondary_buy'): lines.append(f"- **2nd Buy**: {sniper['secondary_buy']}")
-                if sniper.get('take_profit'): lines.append(f"- **Target**: {sniper['take_profit']}")
-                if sniper.get('stop_loss'): lines.append(f"- **Stop Loss**: {sniper['stop_loss']}")
-            else:
-                 # Fallback to result fields if dashboard plan is empty
-                 if hasattr(result, 'pressure_price') and result.pressure_price:
-                     lines.append(f"- **Resistance**: {result.pressure_price}")
-                 if hasattr(result, 'support_price') and result.support_price:
-                     lines.append(f"- **Support**: {result.support_price}")
-            
-            lines.append("")
-        
-        # 单独推送时，添加分割线，方便视觉区分
-        if not is_aggregated:
-            lines.extend([
-                "",
-                f"*Generated: {datetime.now().strftime('%H:%M:%S')}*",
-                "---" 
-            ])
-            
-        return "\n".join(lines)
+        return self._format_stock_compact_block(result, include_footer=not is_aggregated)
     
     def generate_wechat_dashboard(self, results: List[AnalysisResult]) -> str:
         """
@@ -941,105 +1199,7 @@ class NotificationService:
         Returns:
             Markdown 格式的单股报告
         """
-        report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
-        signal_text, signal_emoji, _ = self._get_signal_level(result)
-        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-        core = dashboard.get('core_conclusion', {}) if dashboard else {}
-        battle = dashboard.get('battle_plan', {}) if dashboard else {}
-        intel = dashboard.get('intelligence', {}) if dashboard else {}
-        
-        # 股票名称
-        stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
-        
-        lines = [
-            f"## {signal_emoji} {stock_name} ({result.code})",
-            "",
-            f"> {report_date} | 评分: **{result.sentiment_score}** | {result.trend_prediction}",
-            "",
-        ]
-        
-        # 核心决策（一句话）
-        one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary
-        if one_sentence:
-            lines.extend([
-                "### 📌 核心结论",
-                "",
-                f"**{signal_text}**: {one_sentence}",
-                "",
-            ])
-        
-        # 重要信息（舆情+基本面）
-        info_added = False
-        if intel:
-            if intel.get('earnings_outlook'):
-                if not info_added:
-                    lines.append("### 📰 重要信息")
-                    lines.append("")
-                    info_added = True
-                lines.append(f"📊 **业绩预期**: {intel['earnings_outlook'][:100]}")
-            
-            if intel.get('sentiment_summary'):
-                if not info_added:
-                    lines.append("### 📰 重要信息")
-                    lines.append("")
-                    info_added = True
-                lines.append(f"💭 **舆情情绪**: {intel['sentiment_summary'][:80]}")
-            
-            # 风险警报
-            risks = intel.get('risk_alerts', [])
-            if risks:
-                if not info_added:
-                    lines.append("### 📰 重要信息")
-                    lines.append("")
-                    info_added = True
-                lines.append("")
-                lines.append("🚨 **风险警报**:")
-                for risk in risks[:3]:
-                    lines.append(f"- {risk[:60]}")
-            
-            # 利好催化
-            catalysts = intel.get('positive_catalysts', [])
-            if catalysts:
-                lines.append("")
-                lines.append("✨ **利好催化**:")
-                for cat in catalysts[:3]:
-                    lines.append(f"- {cat[:60]}")
-        
-        if info_added:
-            lines.append("")
-        
-        # 狙击点位
-        sniper = battle.get('sniper_points', {}) if battle else {}
-        if sniper:
-            lines.extend([
-                "### 🎯 操作点位",
-                "",
-                "| 买点 | 止损 | 目标 |",
-                "|------|------|------|",
-            ])
-            ideal_buy = sniper.get('ideal_buy', '-')
-            stop_loss = sniper.get('stop_loss', '-')
-            take_profit = sniper.get('take_profit', '-')
-            lines.append(f"| {ideal_buy} | {stop_loss} | {take_profit} |")
-            lines.append("")
-        
-        # 持仓建议
-        pos_advice = core.get('position_advice', {}) if core else {}
-        if pos_advice:
-            lines.extend([
-                "### 💼 持仓建议",
-                "",
-                f"- 🆕 **空仓者**: {pos_advice.get('no_position', result.operation_advice)}",
-                f"- 💼 **持仓者**: {pos_advice.get('has_position', '继续持有')}",
-                "",
-            ])
-        
-        lines.extend([
-            "---",
-            "*AI生成，仅供参考，不构成投资建议*",
-        ])
-        
-        return "\n".join(lines)
+        return self.generate_telegram_single_stock_report(result)
     
     def send_to_wechat(self, content: str) -> bool:
         """
@@ -1870,6 +2030,7 @@ class NotificationService:
     
     def _send_telegram_chunked(self, api_url: str, chat_id: str, content: str, max_length: int) -> bool:
         """分段发送长 Telegram 消息"""
+        safe_max_length = max_length - 32  # 预留分页标记空间
         # 按段落分割
         sections = content.split("\n---\n")
         
@@ -1881,7 +2042,7 @@ class NotificationService:
         for section in sections:
             section_length = len(section) + 5  # +5 for "\n---\n"
             
-            if current_length + section_length > max_length:
+            if current_length + section_length > safe_max_length:
                 # 发送当前块
                 if current_chunk:
                     chunk_content = "\n---\n".join(current_chunk)
@@ -1902,9 +2063,9 @@ class NotificationService:
         if current_chunk:
             chunk_content = "\n---\n".join(current_chunk)
             # 再次检查大小 (防止最后累积的块过大)
-            if len(chunk_content) > max_length:
+            if len(chunk_content) > safe_max_length:
                  # 极端情况：最后一块也过大，需要强制分割
-                 if not self._send_telegram_force_chunked(api_url, chat_id, chunk_content, max_length):
+                 if not self._send_telegram_force_chunked(api_url, chat_id, chunk_content, safe_max_length):
                      all_success = False
             else:
                 logger.info(f"发送 Telegram 消息块 {chunk_index} (最后)...")
@@ -1951,8 +2112,9 @@ class NotificationService:
         success = True
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            page_marker = f"\n\n📄 {i+1}/{total}" if total > 1 else ""
             logger.info(f"发送 Telegram 强制分页消息 {i+1}/{total}...")
-            if not self._send_telegram_message(api_url, chat_id, chunk):
+            if not self._send_telegram_message(api_url, chat_id, chunk + page_marker):
                 success = False
             time.sleep(1) # 避免限流
             
@@ -1971,16 +2133,22 @@ class NotificationService:
         """
         result = text
         
-        # 移除 # 标题标记（Telegram 不支持）
-        result = re.sub(r'^#{1,6}\s+', '', result, flags=re.MULTILINE)
+        # 标题转换为加粗，而不是直接删除
+        result = re.sub(r'^#{1,6}\s+(.+)$', r'**\1**', result, flags=re.MULTILINE)
         
         # 转换 **bold** 为 *bold*
         result = re.sub(r'\*\*(.+?)\*\*', r'*\1*', result)
+
+        # 分隔线改为纯文本细线，减少 Markdown 误判
+        result = re.sub(r'^---+$', '────────', result, flags=re.MULTILINE)
         
         # 转义特殊字符（Telegram Markdown 需要）
         # 注意：不转义已经用于格式的 * _ `
         for char in ['[', ']', '(', ')']:
             result = result.replace(char, f'\\{char}')
+
+        # 清理多余空行
+        result = re.sub(r'\n{3,}', '\n\n', result).strip()
         
         return result
     

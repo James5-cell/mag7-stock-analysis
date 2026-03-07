@@ -570,7 +570,7 @@ class StockAnalysisPipeline:
         try:
             logger.info("生成决策仪表盘日报...")
             
-            # 生成决策仪表盘格式的详细日报
+            # 生成日报：本地保存使用通用版本，Telegram 单独走专用模板
             report = self.notifier.generate_dashboard_report(results)
             
             # 保存到本地
@@ -602,7 +602,7 @@ class StockAnalysisPipeline:
                     if channel == NotificationChannel.FEISHU:
                         non_wechat_success = self.notifier.send_to_feishu(report) or non_wechat_success
                     elif channel == NotificationChannel.TELEGRAM:
-                        non_wechat_success = self.notifier.send_to_telegram(report) or non_wechat_success
+                        non_wechat_success = self.notifier.send_telegram_report(results) or non_wechat_success
                     elif channel == NotificationChannel.EMAIL:
                         non_wechat_success = self.notifier.send_to_email(report) or non_wechat_success
                     elif channel == NotificationChannel.CUSTOM:
