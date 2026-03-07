@@ -85,7 +85,7 @@ class StockDaily(Base):
     volume_ratio = Column(Float)  # 量比
     
     # 数据来源
-    data_source = Column(String(50))  # 记录数据来源（如 AkshareFetcher）
+    data_source = Column(String(50))  # 记录数据来源（如 YfinanceFetcher）
     
     # 更新时间
     created_at = Column(DateTime, default=datetime.now)

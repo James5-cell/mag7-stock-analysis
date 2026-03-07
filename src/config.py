@@ -37,6 +37,7 @@ class Config:
     
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    market_watchlist: List[str] = field(default_factory=list)
 
     # === 飞书云文档配置 ===
     feishu_app_id: Optional[str] = None
@@ -275,6 +276,19 @@ class Config:
             for code in stock_list_str.split(',') 
             if code.strip()
         ]
+
+        market_watchlist_str = os.getenv('MARKET_WATCHLIST', '')
+        market_watchlist = [
+            code.strip()
+            for code in market_watchlist_str.split(',')
+            if code.strip()
+        ]
+
+        # 如果没有显式配置 MARKET_WATCHLIST，则自动从 STOCK_LIST 中拆分常见美股大盘观察标的
+        if not market_watchlist:
+            inferred_watchlist = {'SPY', 'QQQ', 'DIA', 'IWM'}
+            market_watchlist = [code for code in stock_list if code.upper() in inferred_watchlist]
+            stock_list = [code for code in stock_list if code.upper() not in inferred_watchlist]
         
         # 如果没有配置，使用默认的示例股票
         if not stock_list:
@@ -302,6 +316,7 @@ class Config:
         
         return cls(
             stock_list=stock_list,
+            market_watchlist=market_watchlist,
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
@@ -420,10 +435,30 @@ class Config:
             if code.strip()
         ]
 
+        market_watchlist_str = ''
+        if env_path.exists():
+            env_values = dotenv_values(env_path)
+            market_watchlist_str = (env_values.get('MARKET_WATCHLIST') or '').strip()
+
+        if not market_watchlist_str:
+            market_watchlist_str = os.getenv('MARKET_WATCHLIST', '')
+
+        market_watchlist = [
+            code.strip()
+            for code in market_watchlist_str.split(',')
+            if code.strip()
+        ]
+
+        if not market_watchlist:
+            inferred_watchlist = {'SPY', 'QQQ', 'DIA', 'IWM'}
+            market_watchlist = [code for code in stock_list if code.upper() in inferred_watchlist]
+            stock_list = [code for code in stock_list if code.upper() not in inferred_watchlist]
+
         if not stock_list:        
             stock_list = ['000001']
 
         self.stock_list = stock_list
+        self.market_watchlist = market_watchlist
     
     def validate(self) -> List[str]:
         """
@@ -464,6 +499,25 @@ class Config:
             warnings.append("提示：未配置通知渠道，将不发送推送通知")
         
         return warnings
+
+    def get_combined_watchlist(self) -> List[str]:
+        """返回主股票池 + 市场观察列表，保持顺序去重"""
+        return list(dict.fromkeys((self.stock_list or []) + (self.market_watchlist or [])))
+
+    def is_us_focused_runtime(self) -> bool:
+        """
+        判断当前运行时是否为纯美股/美股 ETF 模式。
+
+        用于在主路径中跳过 A 股/港股专用逻辑，降低复杂度和失败噪音。
+        """
+        import re
+
+        watchlist = self.get_combined_watchlist()
+        if not watchlist:
+            return False
+
+        us_pattern = re.compile(r'^[A-Z]{1,5}(\.[A-Z])?$')
+        return all(us_pattern.match(code.strip().upper()) for code in watchlist if code)
     
     def get_db_url(self) -> str:
         """

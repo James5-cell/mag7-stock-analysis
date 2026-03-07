@@ -898,8 +898,9 @@ class GeminiAnalyzer:
             # 设置生成配置（从配置文件读取温度参数）
             config = get_config()
             generation_config = {
-                "temperature": config.gemini_temperature,
+                "temperature": min(config.gemini_temperature, 0.35),
                 "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
             }
 
             # 根据实际使用的 API 显示日志
@@ -1122,6 +1123,7 @@ If the stock name above is shown as "Stock{code}" or incorrect, please **explici
 - JSON keys stay in English for parser compatibility.
 - All narrative values must be **Simplified Chinese**, except ticker / exact numbers / official English company name.
 - Keep every text field concise, practical, and Telegram-friendly.
+- Output **one single JSON object only**. Do not wrap with markdown fences, explanation, or notes.
 - `dashboard.core_conclusion.one_sentence`: <= 28 Chinese chars.
 - `dashboard.macro_signal.sector_resonance`: <= 18 Chinese chars, explain whether Mag7 / semi / AI / cloud is resonating.
 - `dashboard.intelligence.sentiment_summary`: <= 30 Chinese chars.
@@ -1134,12 +1136,14 @@ If the stock name above is shown as "Stock{code}" or incorrect, please **explici
 - Old but relevant items move to optional `background_context`
 - `positive_catalysts`: at most 2 items, concise Chinese
 - If recent news is insufficient, explicitly say so instead of fabricating
+- If a risk item has no reliable date, do not write `无具体日期` / `不确定日期` / `通用`; move it to `background_context`
 
 ### Execution Requirements:
 - `operation_advice` must use Chinese: 买入 / 加仓 / 持有 / 观望 / 减仓 / 卖出
 - `trend_prediction` should prefer Chinese: 强烈看多 / 看多 / 震荡 / 看空 / 强烈看空
 - `confidence_level` should prefer Chinese: 高 / 中 / 低
 - `battle_plan.sniper_points` should provide exact prices when possible; if data missing, use `待确认`
+- Never output obviously wrong prices. If stop loss / target / entry cannot be justified by current price and trend, use `待确认`
 - Position advice must distinguish no position vs existing position
 
 Please output the complete JSON format Decision Dashboard."""
@@ -1266,11 +1270,41 @@ Please output the complete JSON format Decision Dashboard."""
         # 修复尾随逗号
         json_str = re.sub(r',\s*}', '}', json_str)
         json_str = re.sub(r',\s*]', ']', json_str)
+
+        # 修复属性之间缺失逗号的常见情况
+        repaired_lines = []
+        lines = json_str.splitlines()
+        for idx, line in enumerate(lines):
+            stripped = line.rstrip()
+            repaired_lines.append(stripped)
+            if idx == len(lines) - 1:
+                continue
+
+            next_line = lines[idx + 1].lstrip()
+            current_trimmed = stripped.strip()
+            needs_comma = (
+                current_trimmed
+                and not current_trimmed.endswith((',', '{', '[', ':'))
+                and next_line.startswith('"')
+                and current_trimmed.endswith(('"', '}', ']', 'true', 'false', 'null'))
+            )
+            if needs_comma:
+                repaired_lines[-1] = stripped + ','
+
+        json_str = "\n".join(repaired_lines)
         
         # 确保布尔值是小写
         json_str = json_str.replace('True', 'true').replace('False', 'false')
         
         return json_str
+
+    def _extract_json_string_field(self, text: str, field_name: str) -> str:
+        """从损坏的 JSON/文本中尽量提取字符串字段"""
+        import re
+
+        pattern = rf'"{re.escape(field_name)}"\s*:\s*"([^"]+)"'
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        return match.group(1).strip() if match else ""
     
     def _parse_text_response(
         self, 
@@ -1302,24 +1336,35 @@ Please output the complete JSON format Decision Dashboard."""
             trend = '看空'
             advice = '卖出'
         
-        # Take first 500 chars as summary
-        summary = response_text[:800] if response_text else 'No analysis result'
-        
+        extracted_summary = self._extract_json_string_field(response_text, 'analysis_summary')
+        extracted_conclusion = self._extract_json_string_field(response_text, 'one_sentence')
+        extracted_risk = self._extract_json_string_field(response_text, 'risk_warning')
+        extracted_reason = self._extract_json_string_field(response_text, 'buy_reason')
+
+        summary = extracted_summary or extracted_conclusion or '结构化输出异常，暂按技术面跟踪。'
+        summary = summary[:80]
+        risk_warning = extracted_risk or '结构化结果不完整，新闻与技术面需二次确认。'
+        buy_reason = extracted_reason or '结构化结果不完整，优先参考均线、量能与近7日新闻。'
+
         # Construct a fallback dashboard so notification.py has something to show
         fallback_dashboard = {
             "core_conclusion": {
-                "one_sentence": f"JSON parsing failed. Showing raw analysis: {summary[:100]}..."
+                "one_sentence": summary,
+                "position_advice": {
+                    "no_position": "先观察，不追价",
+                    "has_position": "控仓并等待更清晰信号"
+                }
             },
             "intelligence": {
-                "sentiment_summary": "Analysis extracted from raw text due to format error.",
-                "risk_alerts": ["JSON Format Error - Please check raw output below"]
+                "sentiment_summary": "结构化输出异常，已降级简报",
+                "risk_alerts": []
             },
             "battle_plan": {
                  "position_strategy": {
                      "suggested_position": advice
                  }
             },
-            "data_perspective": {}
+            "data_perspective": {},
         }
         
         return AnalysisResult(
@@ -1331,8 +1376,9 @@ Please output the complete JSON format Decision Dashboard."""
             confidence_level='低',
             dashboard=fallback_dashboard, # Populate fallback dashboard
             analysis_summary=summary,
-            key_points='JSON 解析失败，仅供参考',
-            risk_warning='结构化结果解析失败，请人工复核。',
+            key_points='结构化输出异常,优先参考技术面,等待下次刷新',
+            risk_warning=risk_warning,
+            buy_reason=buy_reason,
             raw_response=response_text,
             success=True,
         )

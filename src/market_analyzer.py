@@ -99,6 +99,7 @@ class MarketAnalyzer:
         self.search_service = search_service
         self.analyzer = analyzer
         self.data_manager = DataFetcherManager()
+        self._is_us_mode = self.config.is_us_focused_runtime()
         
         # 直接使用 YfinanceFetcher 获取美股数据
         from data_provider.yfinance_fetcher import YfinanceFetcher
@@ -163,6 +164,9 @@ class MarketAnalyzer:
         """
         today = datetime.now().strftime('%Y-%m-%d')
         overview = MarketOverview(date=today)
+
+        if self._is_us_mode:
+            return self._get_us_market_overview(overview)
         
         # 1. 获取主要指数行情
         overview.indices = self._get_main_indices()
@@ -176,6 +180,35 @@ class MarketAnalyzer:
         # 4. 获取北向资金（可选）
         # self._get_north_flow(overview)
         
+        return overview
+
+    def _get_us_market_overview(self, overview: MarketOverview) -> MarketOverview:
+        """
+        纯美股运行模式下的精简市场概览。
+
+        仅保留美股复盘真正需要的指数快照，跳过 A 股特有的：
+        - 全市场涨跌家数
+        - 涨停/跌停统计
+        - 板块涨跌榜
+        """
+        us_indices = self.yf_fetcher.get_us_indices() or []
+        overview.indices = [
+            MarketIndex(
+                code=item['code'],
+                name=item['name'],
+                current=item['current'],
+                change=item['change'],
+                change_pct=item['change_pct'],
+                open=item['open'],
+                high=item['high'],
+                low=item['low'],
+                prev_close=item['prev_close'],
+                volume=item['volume'],
+                amount=item.get('amount', 0.0),
+                amplitude=item['amplitude'],
+            )
+            for item in us_indices
+        ]
         return overview
 
     

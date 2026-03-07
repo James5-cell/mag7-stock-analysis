@@ -8,7 +8,7 @@
 
 > 🤖 基于 AI 大模型的 **美股科技七巨頭（Magnificent 7）宏觀環境分析系統**
 > 
-> 每日自動分析 NVDA、AAPL、MSFT、GOOGL、META、AMZN、TSLA，判斷整體市場風險偏好並推送到 Telegram
+> 每日自動分析 NVDA、AAPL、MSFT、GOOGL、META、AMZN、TSLA，並可搭配 SPY / QQQ / DIA 作為大盤觀察對象，將首頁總覽與分股卡片推送到 Telegram
 
 </div>
 
@@ -31,6 +31,12 @@
 - **精確狙擊點位** - $買入價、$止損價、$目標價
 - **檢查清單** - ✅⚠️❌ 快速掃描每項條件
 
+### 📲 適配 Telegram 的推送結構
+
+- **首頁總覽單獨一條** - 總體信號、板塊共振、風險等級、目錄索引
+- **每個標的一條卡片** - 固定 5-6 行，方便手機快速閱讀
+- **Mag 7 與大盤觀察分組** - 把 `SPY / QQQ / DIA` 從個股池中拆出單獨觀察
+
 ### 🚀 適配高波動科技股
 
 原版系統針對 A 股設計，本分支專為美股七巨頭優化：
@@ -47,25 +53,26 @@
 ## 📈 推送效果
 
 ```
-🎯 2026-02-01 Mag 7 宏觀決策儀表盤
-7只股票 | 🟢買入:3 🟡觀望:3 🔴卖出:1
+# 📊 2026-03-08 Mag7 + 大盤觀察
 
-🌍 宏觀信號: 🟢 Risk-On | 科技股集體走強
+總體信號：**偏多，輪動向上** | 板塊共振：**AI/半導體共振偏強** | 風險等級：**中**
+分布：🟢 4 | 🟡 4 | 🔴 2 | 均分 63
+Mag7總結：偏強 | 🟢3 🟡3 🔴1 | 關注 NVDA / MSFT
+大盤觀察：分化 | 🟢0 🟡1 🔴1 | 關注 SPY / QQQ
 
----
+目錄索引：
+Mag7：
+1. 🟢 NVDA NVIDIA | 偏多
+2. ⚪ AAPL Apple | 觀望
+大盤觀察：
+8. ⚪ SPY SPDR S&P 500 ETF Trust | 觀望
 
-� 買入 | NVIDIA (NVDA)
-📌 縮量回踩MA5支撐，乖離率3.2%處於最佳買點
-💰 狙擊: $950 買入 | $900 止損 | $1050 目標
-
-🌍 宏觀信號
-**市場影響權重**: 高 | **風險偏好**: � Risk-On
-**板塊共振**: NVDA 帶動芯片股集體走強
-
-✅多頭排列 ✅乖離率<8% ✅機構情緒健康
-
----
-生成時間: 18:00
+## 🟢 NVIDIA (NVDA)
+信號：偏多 | 結論：回踩不破，仍可偏多應對
+理由：1) 均線多頭排列 2) MA5乖離+0.4% 未過熱 3) 縮量回踩，拋壓可控
+風險(近7日)：中｜2026-03-07｜財報臨近，波動可能放大
+🎯 **進場 $117.5** | 🛑 **止損 $112** | 🎯 **目標 $126**
+執行：空倉等回踩 MA5 再試單；持倉持有並守住止損
 ```
 
 ---
@@ -78,13 +85,15 @@
 
 進入 `Settings` → `Secrets and variables` → `Actions`
 
-| Secret 名稱 | 說明 | 必填 |
+| Secret / Variable 名稱 | 建議值 | 必填 |
 |------------|------|:----:|
 | `STOCK_LIST` | `NVDA,AAPL,MSFT,GOOGL,META,AMZN,TSLA` | ✅ |
+| `MARKET_WATCHLIST` | `SPY,QQQ,DIA` | 推薦 |
 | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) 免費獲取 | ✅ |
 | `TELEGRAM_BOT_TOKEN` | @BotFather 獲取 | ✅ |
 | `TELEGRAM_CHAT_ID` | @userinfobot 獲取 | ✅ |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 新聞搜索 | 推薦 |
+| `SINGLE_STOCK_NOTIFY` | `false` | 推薦 |
 
 ### 3. 啟用 Actions
 
@@ -97,6 +106,19 @@
 ### 5. 完成！
 
 默認每個工作日 **18:00（北京時間）** 自動執行
+
+### 推薦的 Telegram 模式
+
+- `SINGLE_STOCK_NOTIFY=false`
+- `REPORT_TYPE=simple`
+- `STOCK_LIST` 只放 Mag 7
+- `MARKET_WATCHLIST` 放 `SPY,QQQ,DIA`
+
+這樣會得到最穩定的推送順序：
+
+1. 首頁總覽一條
+2. Mag 7 個股逐條推送
+3. 大盤觀察標的逐條推送
 
 ---
 
@@ -143,6 +165,27 @@ daily_stock_analysis/
 | `GEMINI_MODEL` | AI 模型 | `gemini-3-flash-preview` |
 | `REPORT_TYPE` | 報告類型 | `simple` |
 | `ANALYSIS_DELAY` | 分析間隔（秒） | `10` |
+| `MARKET_WATCHLIST` | 大盤觀察列表，如 `SPY,QQQ,DIA` | `自動從 STOCK_LIST 拆分常見 ETF` |
+| `SINGLE_STOCK_NOTIFY` | 單股即時推送；Telegram 推薦設為 `false` | `false` |
+
+### 建議的 `.env` 配置
+
+```bash
+STOCK_LIST=NVDA,AAPL,MSFT,GOOGL,META,AMZN,TSLA
+MARKET_WATCHLIST=SPY,QQQ,DIA
+
+GEMINI_API_KEY=your_gemini_api_key
+TAVILY_API_KEYS=your_tavily_key
+
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+
+REPORT_TYPE=simple
+SINGLE_STOCK_NOTIFY=false
+ENABLE_REALTIME_QUOTE=true
+ENABLE_CHIP_DISTRIBUTION=false
+GEMINI_TEMPERATURE=0.25
+```
 
 ---
 

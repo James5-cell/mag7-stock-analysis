@@ -27,7 +27,8 @@ from tenacity import (
     before_sleep_log,
 )
 
-from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS
+from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_us_symbol
+from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,74 @@ class YfinanceFetcher(BaseFetcher):
     def __init__(self):
         """初始化 YfinanceFetcher"""
         pass
+
+    def _get_ticker(self, stock_code: str):
+        """获取 yfinance Ticker 实例"""
+        import yfinance as yf
+        return yf.Ticker(self._convert_stock_code(stock_code))
+
+    def get_stock_name(self, stock_code: str) -> Optional[str]:
+        """获取股票名称，优先用于美股/ETF 场景"""
+        try:
+            ticker = self._get_ticker(stock_code)
+            info = getattr(ticker, "fast_info", None)
+            if info and getattr(info, "get", None):
+                short_name = info.get("shortName") or info.get("longName")
+                if short_name:
+                    return str(short_name)
+
+            raw_info = getattr(ticker, "info", {}) or {}
+            return raw_info.get("shortName") or raw_info.get("longName")
+        except Exception as e:
+            logger.debug(f"[Yfinance] 获取 {stock_code} 名称失败: {e}")
+            return None
+
+    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+        """获取美股/美股 ETF 实时行情，用于增强上下文与名称识别"""
+        normalized_code = (stock_code or "").strip().upper()
+        if not is_us_symbol(normalized_code):
+            return None
+
+        try:
+            ticker = self._get_ticker(normalized_code)
+            hist = ticker.history(period='2d', interval='1d')
+            if hist.empty:
+                return None
+
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else latest
+
+            raw_info = getattr(ticker, "info", {}) or {}
+            name = raw_info.get("shortName") or raw_info.get("longName") or normalized_code
+
+            price = safe_float(latest.get('Close'))
+            prev_close = safe_float(prev.get('Close'))
+            if price is None:
+                return None
+
+            change_amount = price - prev_close if prev_close else None
+            change_pct = ((price - prev_close) / prev_close * 100) if prev_close else None
+
+            quote = UnifiedRealtimeQuote(
+                code=normalized_code,
+                name=str(name),
+                source=RealtimeSource.FALLBACK,
+                price=round(price, 2),
+                change_pct=round(change_pct, 2) if change_pct is not None else None,
+                change_amount=round(change_amount, 2) if change_amount is not None else None,
+                volume=safe_int(latest.get('Volume')),
+                amount=(safe_float(latest.get('Volume'), 0) or 0) * price,
+                open_price=safe_float(latest.get('Open')),
+                high=safe_float(latest.get('High')),
+                low=safe_float(latest.get('Low')),
+                pre_close=prev_close,
+                high_52w=safe_float(raw_info.get('fiftyTwoWeekHigh')),
+                low_52w=safe_float(raw_info.get('fiftyTwoWeekLow')),
+            )
+            return quote if quote.has_basic_data() else None
+        except Exception as e:
+            logger.debug(f"[Yfinance] 获取 {normalized_code} 实时行情失败: {e}")
+            return None
     
     def _convert_stock_code(self, stock_code: str) -> str:
         """

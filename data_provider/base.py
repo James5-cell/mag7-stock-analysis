@@ -16,6 +16,7 @@
 
 import logging
 import random
+import re
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -36,6 +37,13 @@ logger = logging.getLogger(__name__)
 
 # === 标准化列名定义 ===
 STANDARD_COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'pct_chg']
+
+
+def is_us_symbol(stock_code: str) -> bool:
+    """判断是否为美股/美股 ETF 代码，如 AAPL、SPY、BRK.B"""
+    if not stock_code:
+        return False
+    return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', stock_code.strip().upper()))
 
 
 class DataFetchError(Exception):
@@ -301,57 +309,31 @@ class DataFetcherManager:
     
     def _init_default_fetchers(self) -> None:
         """
-        初始化默认数据源列表
+        初始化默认数据源列表。
 
-        优先级动态调整逻辑：
-        - 如果配置了 TUSHARE_TOKEN：Tushare 优先级提升为 0（最高）
-        - 否则按默认优先级：
-          0. EfinanceFetcher (Priority 0) - 最高优先级
-          1. AkshareFetcher (Priority 1)
-          2. PytdxFetcher (Priority 2) - 通达信
-          2. TushareFetcher (Priority 2)
-          3. BaostockFetcher (Priority 3)
-          4. YfinanceFetcher (Priority 4)
+        当前项目已收敛为美股主路径，默认仅保留 YfinanceFetcher。
+        这样可以显著降低无效初始化、失败重试和历史遗留代码对主流程的影响。
         """
-        from .efinance_fetcher import EfinanceFetcher
-        from .akshare_fetcher import AkshareFetcher
-        from .tushare_fetcher import TushareFetcher
-        from .pytdx_fetcher import PytdxFetcher
-        from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
-        from src.config import get_config
-
-        config = get_config()
-
-        # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
-        efinance = EfinanceFetcher()
-        akshare = AkshareFetcher()
-        tushare = TushareFetcher()  # 会根据 Token 配置自动调整优先级
-        pytdx = PytdxFetcher()      # 通达信数据源
-        baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
-
-        # 初始化数据源列表
-        self._fetchers = [
-            efinance,
-            akshare,
-            tushare,
-            pytdx,
-            baostock,
-            yfinance,
-        ]
-
-        # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
-        self._fetchers.sort(key=lambda f: f.priority)
-
-        # 构建优先级说明
-        priority_info = ", ".join([f"{f.name}(P{f.priority})" for f in self._fetchers])
-        logger.info(f"已初始化 {len(self._fetchers)} 个数据源（按优先级）: {priority_info}")
+        self._fetchers = [yfinance]
+        logger.info("已初始化美股专用数据源: YfinanceFetcher")
     
     def add_fetcher(self, fetcher: BaseFetcher) -> None:
         """添加数据源并重新排序"""
         self._fetchers.append(fetcher)
         self._fetchers.sort(key=lambda f: f.priority)
+
+    def _select_fetchers_for_code(self, stock_code: str) -> List[BaseFetcher]:
+        """
+        根据标的类型选择数据源。
+
+        当前默认运行模式是美股主路径，因此统一返回已注册的美股数据源。
+        """
+        normalized_code = (stock_code or "").strip().upper()
+        if is_us_symbol(normalized_code):
+            logger.info(f"[数据源路由] {normalized_code} 使用美股数据源: {', '.join(f.name for f in self._fetchers)}")
+        return self._fetchers
     
     def get_daily_data(
         self, 
@@ -383,7 +365,9 @@ class DataFetcherManager:
         """
         errors = []
         
-        for fetcher in self._fetchers:
+        selected_fetchers = self._select_fetchers_for_code(stock_code)
+
+        for fetcher in selected_fetchers:
             try:
                 logger.info(f"尝试使用 [{fetcher.name}] 获取 {stock_code}...")
                 df = fetcher.get_daily_data(
@@ -416,16 +400,7 @@ class DataFetcherManager:
     
     def prefetch_realtime_quotes(self, stock_codes: List[str]) -> int:
         """
-        批量预取实时行情数据（在分析开始前调用）
-        
-        策略：
-        1. 检查优先级中是否包含全量拉取数据源（efinance/akshare_em）
-        2. 如果不包含，跳过预取（新浪/腾讯是单股票查询，无需预取）
-        3. 如果自选股数量 >= 5 且使用全量数据源，则预取填充缓存
-        
-        这样做的好处：
-        - 使用新浪/腾讯时：每只股票独立查询，无全量拉取问题
-        - 使用 efinance/东财时：预取一次，后续缓存命中
+        美股模式下不做批量预取。
         
         Args:
             stock_codes: 待分析的股票代码列表
@@ -433,70 +408,14 @@ class DataFetcherManager:
         Returns:
             预取的股票数量（0 表示跳过预取）
         """
-        from src.config import get_config
-        
-        config = get_config()
-        
-        # 如果实时行情被禁用，跳过预取
-        if not config.enable_realtime_quote:
-            logger.debug("[预取] 实时行情功能已禁用，跳过预取")
-            return 0
-        
-        # 检查优先级中是否包含全量拉取数据源
-        # 注意：新增全量接口（如 tushare_realtime）时需同步更新此列表
-        # 全量接口特征：一次 API 调用拉取全市场 5000+ 股票数据
-        priority = config.realtime_source_priority.lower()
-        bulk_sources = ['efinance', 'akshare_em', 'tushare']  # 全量接口列表
-        
-        # 如果优先级中前两个都不是全量数据源，跳过预取
-        # 因为新浪/腾讯是单股票查询，不需要预取
-        priority_list = [s.strip() for s in priority.split(',')]
-        first_bulk_source_index = None
-        for i, source in enumerate(priority_list):
-            if source in bulk_sources:
-                first_bulk_source_index = i
-                break
-        
-        # 如果没有全量数据源，或者全量数据源排在第 3 位之后，跳过预取
-        if first_bulk_source_index is None or first_bulk_source_index >= 2:
-            logger.info(f"[预取] 当前优先级使用轻量级数据源(sina/tencent)，无需预取")
-            return 0
-        
-        # 如果股票数量少于 5 个，不进行批量预取（逐个查询更高效）
-        if len(stock_codes) < 5:
-            logger.info(f"[预取] 股票数量 {len(stock_codes)} < 5，跳过批量预取")
-            return 0
-        
-        logger.info(f"[预取] 开始批量预取实时行情，共 {len(stock_codes)} 只股票...")
-        
-        # 尝试通过 efinance 或 akshare 预取
-        # 只需要调用一次 get_realtime_quote，缓存机制会自动拉取全市场数据
-        try:
-            # 用第一只股票触发全量拉取
-            first_code = stock_codes[0]
-            quote = self.get_realtime_quote(first_code)
-            
-            if quote:
-                logger.info(f"[预取] 批量预取完成，缓存已填充")
-                return len(stock_codes)
-            else:
-                logger.warning(f"[预取] 批量预取失败，将使用逐个查询模式")
-                return 0
-                
-        except Exception as e:
-            logger.error(f"[预取] 批量预取异常: {e}")
-            return 0
+        logger.debug(f"[预取] 美股模式无需批量预取，股票数 {len(stock_codes)}")
+        return 0
     
     def get_realtime_quote(self, stock_code: str):
         """
-        获取实时行情数据（自动故障切换）
-        
-        故障切换策略（按配置的优先级）：
-        1. EfinanceFetcher.get_realtime_quote()
-        2. AkshareFetcher.get_realtime_quote(source="em")  - 东财
-        3. AkshareFetcher.get_realtime_quote(source="sina") - 新浪
-        4. AkshareFetcher.get_realtime_quote(source="tencent") - 腾讯
-        5. 返回 None（降级兜底）
+        获取实时行情数据。
+
+        当前项目为美股主路径，仅尝试 YfinanceFetcher。
         
         Args:
             stock_code: 股票代码
@@ -504,7 +423,6 @@ class DataFetcherManager:
         Returns:
             UnifiedRealtimeQuote 对象，所有数据源都失败则返回 None
         """
-        from .realtime_types import get_realtime_circuit_breaker
         from src.config import get_config
         
         config = get_config()
@@ -514,76 +432,24 @@ class DataFetcherManager:
             logger.debug(f"[实时行情] 功能已禁用，跳过 {stock_code}")
             return None
         
-        # 获取配置的数据源优先级
-        source_priority = config.realtime_source_priority.split(',')
-        
-        errors = []
-        
-        for source in source_priority:
-            source = source.strip().lower()
-            
-            try:
-                quote = None
-                
-                if source == "efinance":
-                    # 尝试 EfinanceFetcher
-                    for fetcher in self._fetchers:
-                        if fetcher.name == "EfinanceFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
-                                quote = fetcher.get_realtime_quote(stock_code)
-                            break
-                
-                elif source == "akshare_em":
-                    # 尝试 AkshareFetcher 东财数据源
-                    for fetcher in self._fetchers:
-                        if fetcher.name == "AkshareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
-                                quote = fetcher.get_realtime_quote(stock_code, source="em")
-                            break
-                
-                elif source == "akshare_sina":
-                    # 尝试 AkshareFetcher 新浪数据源
-                    for fetcher in self._fetchers:
-                        if fetcher.name == "AkshareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
-                                quote = fetcher.get_realtime_quote(stock_code, source="sina")
-                            break
-                
-                elif source in ("tencent", "akshare_qq"):
-                    # 尝试 AkshareFetcher 腾讯数据源
-                    for fetcher in self._fetchers:
-                        if fetcher.name == "AkshareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
-                                quote = fetcher.get_realtime_quote(stock_code, source="tencent")
-                            break
-                
-                if quote is not None and quote.has_basic_data():
-                    logger.info(f"[实时行情] {stock_code} 成功获取 (来源: {source})")
-                    return quote
-                    
-            except Exception as e:
-                error_msg = f"[{source}] 失败: {str(e)}"
-                logger.warning(error_msg)
-                errors.append(error_msg)
-                continue
-        
-        # 所有数据源都失败，返回 None（降级兜底）
-        if errors:
-            logger.warning(f"[实时行情] {stock_code} 所有数据源均失败，降级处理: {'; '.join(errors)}")
-        else:
-            logger.warning(f"[实时行情] {stock_code} 无可用数据源")
-        
+        normalized_code = (stock_code or "").strip().upper()
+
+        for fetcher in self._fetchers:
+            if hasattr(fetcher, 'get_realtime_quote'):
+                try:
+                    quote = fetcher.get_realtime_quote(normalized_code)
+                    if quote is not None and quote.has_basic_data():
+                        logger.info(f"[实时行情] {normalized_code} 成功获取 (来源: {fetcher.name})")
+                        return quote
+                except Exception as e:
+                    logger.warning(f"[实时行情] {fetcher.name} 获取 {normalized_code} 失败: {e}")
+
+        logger.warning(f"[实时行情] {normalized_code} 未获取到可用实时行情，回退为历史数据模式")
         return None
     
     def get_chip_distribution(self, stock_code: str):
         """
-        获取筹码分布数据（带熔断和多数据源降级）
-
-        策略：
-        1. 检查配置开关
-        2. 检查熔断器状态
-        3. 依次尝试多个数据源：AkshareFetcher -> TushareFetcher -> EfinanceFetcher
-        4. 所有数据源失败则返回 None（降级兜底）
+        美股项目不再提供筹码分布数据，始终返回 None。
 
         Args:
             stock_code: 股票代码
@@ -591,47 +457,7 @@ class DataFetcherManager:
         Returns:
             ChipDistribution 对象，失败则返回 None
         """
-        from .realtime_types import get_chip_circuit_breaker
-        from src.config import get_config
-
-        config = get_config()
-
-        # 如果筹码分布功能被禁用，直接返回 None
-        if not config.enable_chip_distribution:
-            logger.debug(f"[筹码分布] 功能已禁用，跳过 {stock_code}")
-            return None
-
-        circuit_breaker = get_chip_circuit_breaker()
-
-        # 定义筹码数据源优先级列表
-        chip_sources = [
-            ("AkshareFetcher", "akshare_chip"),
-            ("TushareFetcher", "tushare_chip"),
-            ("EfinanceFetcher", "efinance_chip"),
-        ]
-
-        for fetcher_name, source_key in chip_sources:
-            # 检查熔断器状态
-            if not circuit_breaker.is_available(source_key):
-                logger.debug(f"[熔断] {fetcher_name} 筹码接口处于熔断状态，尝试下一个")
-                continue
-
-            try:
-                for fetcher in self._fetchers:
-                    if fetcher.name == fetcher_name:
-                        if hasattr(fetcher, 'get_chip_distribution'):
-                            chip = fetcher.get_chip_distribution(stock_code)
-                            if chip is not None:
-                                circuit_breaker.record_success(source_key)
-                                logger.info(f"[筹码分布] {stock_code} 成功获取 (来源: {fetcher_name})")
-                                return chip
-                        break
-            except Exception as e:
-                logger.warning(f"[筹码分布] {fetcher_name} 获取 {stock_code} 失败: {e}")
-                circuit_breaker.record_failure(source_key, str(e))
-                continue
-
-        logger.warning(f"[筹码分布] {stock_code} 所有数据源均失败")
+        logger.debug(f"[筹码分布] 美股模式不提供该数据: {stock_code}")
         return None
 
     def get_stock_name(self, stock_code: str) -> Optional[str]:
@@ -685,10 +511,7 @@ class DataFetcherManager:
     def batch_get_stock_names(self, stock_codes: List[str]) -> Dict[str, str]:
         """
         批量获取股票中文名称
-        
-        先尝试从支持批量查询的数据源获取股票列表，
-        然后再逐个查询缺失的股票名称。
-        
+
         Args:
             stock_codes: 股票代码列表
             
@@ -696,49 +519,16 @@ class DataFetcherManager:
             {股票代码: 股票名称} 字典
         """
         result = {}
-        missing_codes = set(stock_codes)
-        
-        # 1. 先检查缓存
         if not hasattr(self, '_stock_name_cache'):
             self._stock_name_cache = {}
-        
+
         for code in stock_codes:
             if code in self._stock_name_cache:
                 result[code] = self._stock_name_cache[code]
-                missing_codes.discard(code)
-        
-        if not missing_codes:
-            return result
-        
-        # 2. 尝试批量获取股票列表
-        for fetcher in self._fetchers:
-            if hasattr(fetcher, 'get_stock_list') and missing_codes:
-                try:
-                    stock_list = fetcher.get_stock_list()
-                    if stock_list is not None and not stock_list.empty:
-                        for _, row in stock_list.iterrows():
-                            code = row.get('code')
-                            name = row.get('name')
-                            if code and name:
-                                self._stock_name_cache[code] = name
-                                if code in missing_codes:
-                                    result[code] = name
-                                    missing_codes.discard(code)
-                        
-                        if not missing_codes:
-                            break
-                        
-                        logger.info(f"[股票名称] 从 {fetcher.name} 批量获取完成，剩余 {len(missing_codes)} 个待查")
-                except Exception as e:
-                    logger.debug(f"[股票名称] {fetcher.name} 批量获取失败: {e}")
-                    continue
-        
-        # 3. 逐个获取剩余的
-        for code in list(missing_codes):
+                continue
             name = self.get_stock_name(code)
             if name:
                 result[code] = name
-                missing_codes.discard(code)
         
         logger.info(f"[股票名称] 批量获取完成，成功 {len(result)}/{len(stock_codes)}")
         return result

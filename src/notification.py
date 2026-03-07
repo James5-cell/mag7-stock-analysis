@@ -41,6 +41,9 @@ from bot.models import BotMessage
 
 logger = logging.getLogger(__name__)
 
+MAG7_CODES = {"NVDA", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "TSLA"}
+DEFAULT_MARKET_WATCH_CODES = {"SPY", "QQQ", "DIA", "IWM"}
+
 
 class NotificationChannel(Enum):
     """通知渠道类型"""
@@ -130,8 +133,13 @@ class NotificationService:
         检测所有已配置的渠道，推送时会向所有渠道发送
         """
         config = get_config()
+        self._config = config
         self._source_message = source_message
         self._context_channels: List[str] = []
+        self._market_watch_codes = {
+            code.upper()
+            for code in (getattr(config, 'market_watchlist', []) or [])
+        } | DEFAULT_MARKET_WATCH_CODES
         
         # 各渠道的 Webhook URL
         self._wechat_url = config.wechat_webhook_url
@@ -557,6 +565,21 @@ class NotificationService:
             return result.name
         return f'股票{result.code}'
 
+    def _get_result_group(self, result: AnalysisResult) -> str:
+        """将结果分为 Mag7 / 市场观察 / 其他，便于首页总览分组"""
+        code = (result.code or "").upper()
+        if code in self._market_watch_codes:
+            return "market_watch"
+        if code in MAG7_CODES:
+            return "mag7"
+        return "other"
+
+    def _split_results_by_group(self, results: List[AnalysisResult]) -> Dict[str, List[AnalysisResult]]:
+        grouped = {"mag7": [], "market_watch": [], "other": []}
+        for result in results:
+            grouped[self._get_result_group(result)].append(result)
+        return grouped
+
     def _compact_text(self, text: Optional[str], max_len: int = 28) -> str:
         """压缩文本长度，适配 Telegram 快读场景"""
         if not text:
@@ -566,18 +589,81 @@ class NotificationService:
             return cleaned
         return cleaned[: max_len - 1].rstrip(" ,，。；") + "…"
 
-    def _extract_price_token(self, raw_value: Any, stock_code: str) -> str:
-        """从作战计划文本中提取价格，缺失时回退为待确认"""
+    def _get_reference_price(self, result: AnalysisResult) -> Optional[float]:
+        """获取价格校验用参考价"""
+        dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        pivot = dashboard.get('data_perspective', {}) if dashboard else {}
+        price_position = pivot.get('price_position', {}) if pivot else {}
+
+        candidates = [
+            price_position.get('current_price'),
+            price_position.get('close'),
+            price_position.get('ma5'),
+            price_position.get('ma10'),
+        ]
+        for candidate in candidates:
+            try:
+                if candidate is not None:
+                    if isinstance(candidate, str):
+                        matched = re.search(r'(\d+(?:\.\d+)?)', candidate.replace(',', ''))
+                        if not matched:
+                            continue
+                        candidate = matched.group(1)
+                    price = float(candidate)
+                    if price > 0:
+                        return price
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _is_plausible_price(self, price: float, reference_price: Optional[float], kind: str) -> bool:
+        """对 LLM 返回价位做安全校验，拦截明显脏数据"""
+        if price <= 0:
+            return False
+        if reference_price is None or reference_price <= 0:
+            return True
+
+        ratio = price / reference_price
+        if ratio < 0.4 or ratio > 1.8:
+            return False
+        if kind == "stop_loss" and price > reference_price * 1.2:
+            return False
+        if kind == "take_profit" and price < reference_price * 0.6:
+            return False
+        return True
+
+    def _extract_price_token(
+        self,
+        raw_value: Any,
+        stock_code: str,
+        result: Optional[AnalysisResult] = None,
+        kind: str = "generic"
+    ) -> str:
+        """从作战计划文本中提取价格，缺失或异常时回退为待确认"""
         if raw_value in (None, "", "-", "N/A", "待确认"):
             return "待确认"
 
         text = str(raw_value)
+        if any(marker in text for marker in ["待确认", "暂不设置", "无明确", "not available"]):
+            return "待确认"
+
         match = re.search(r'(\d+(?:\.\d+)?)', text.replace(',', ''))
         if not match:
-            return self._compact_text(text, 14) or "待确认"
+            return "待确认"
 
         number = match.group(1)
-        return f"${number}" if stock_code.isalpha() else number
+        try:
+            parsed_price = float(number)
+        except ValueError:
+            return "待确认"
+
+        reference_price = self._get_reference_price(result) if result else None
+        if not self._is_plausible_price(parsed_price, reference_price, kind):
+            return "待确认"
+
+        is_us_ticker = bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', (stock_code or '').upper()))
+        formatted_price = f"{parsed_price:.2f}".rstrip('0').rstrip('.')
+        return f"${formatted_price}" if is_us_ticker else formatted_price
 
     def _extract_date_from_text(self, text: str) -> Optional[date]:
         """尝试从文本中提取日期，用于筛选近 7 日风险"""
@@ -603,7 +689,27 @@ class NotificationService:
             except ValueError:
                 continue
 
+        english_match = re.search(r'([A-Z][a-z]{2,8})\s+(\d{1,2}),\s*(\d{4})', text)
+        if english_match:
+            try:
+                month_name, day, year = english_match.groups()
+                parsed = datetime.strptime(f"{month_name} {day} {year}", "%B %d %Y")
+                return parsed.date()
+            except ValueError:
+                try:
+                    parsed = datetime.strptime(f"{month_name} {day} {year}", "%b %d %Y")
+                    return parsed.date()
+                except ValueError:
+                    pass
+
         return None
+
+    def _clean_risk_text(self, text: str) -> str:
+        """移除占位日期和低质量前缀，保留用户可读信息"""
+        cleaned = re.sub(r'^(高｜|中｜|低｜)', '', str(text or '')).strip()
+        cleaned = re.sub(r'^(无具体日期|不确定日期|通用|未知日期)｜', '', cleaned)
+        cleaned = cleaned.replace('历史事件，对当下影响有限', '历史事件')
+        return cleaned.strip(" -:|；，。")
 
     def _classify_risk_level(self, text: str) -> str:
         """对风险项做高/中/低分级，优先尊重模型已有前缀"""
@@ -666,8 +772,14 @@ class NotificationService:
         for item in all_items:
             if not item:
                 continue
-            item_date = self._extract_date_from_text(str(item))
-            cleaned = re.sub(r'^(高｜|中｜|低｜)', '', str(item)).strip()
+            cleaned = self._clean_risk_text(str(item))
+            if not cleaned:
+                continue
+            item_date = self._extract_date_from_text(cleaned)
+            if not item_date and any(marker in str(item) for marker in ['无具体日期', '不确定日期', '通用']):
+                if cleaned not in background:
+                    background.append(self._compact_text(cleaned, 24))
+                continue
             compact = self._compact_text(cleaned, 24)
             if item_date and item_date < cutoff_date:
                 if compact:
@@ -697,7 +809,13 @@ class NotificationService:
         if not parts:
             if has_news_context:
                 fallback = self._compact_text(result.risk_warning, 24)
-                if fallback:
+                if (
+                    fallback
+                    and 'JSON' not in fallback
+                    and '解析失败' not in fallback
+                    and '结构化' not in fallback
+                    and '二次确认' not in fallback
+                ):
                     parts.append(f"中｜{fallback}")
                 else:
                     parts.append("低｜近7日未见新增硬风险")
@@ -718,11 +836,22 @@ class NotificationService:
         reasons = []
 
         trend_status = pivot.get('trend_status', {})
-        ma_alignment = self._compact_text(trend_status.get('ma_alignment'), 18)
-        if ma_alignment:
-            reasons.append(ma_alignment)
-
         price_position = pivot.get('price_position', {})
+        ma5 = price_position.get('ma5')
+        ma10 = price_position.get('ma10')
+        ma20 = price_position.get('ma20')
+        if all(isinstance(value, (int, float)) for value in [ma5, ma10, ma20]):
+            if ma5 > ma10 > ma20:
+                reasons.append("均线多头排列")
+            elif ma5 < ma10 < ma20:
+                reasons.append("均线空头排列")
+            else:
+                reasons.append("均线分化，等待确认")
+        else:
+            ma_alignment = self._compact_text(trend_status.get('ma_alignment'), 18)
+            if ma_alignment:
+                reasons.append(ma_alignment)
+
         bias_ma5 = price_position.get('bias_ma5')
         if isinstance(bias_ma5, (int, float)):
             status = "未过热" if abs(bias_ma5) <= 8 else "偏热"
@@ -760,9 +889,9 @@ class NotificationService:
     def _format_execution_line(self, result: AnalysisResult) -> str:
         """统一高亮进场/止损/目标价"""
         sniper = result.get_sniper_points() if hasattr(result, 'get_sniper_points') else {}
-        entry = self._extract_price_token(sniper.get('ideal_buy'), result.code)
-        stop = self._extract_price_token(sniper.get('stop_loss'), result.code)
-        target = self._extract_price_token(sniper.get('take_profit'), result.code)
+        entry = self._extract_price_token(sniper.get('ideal_buy'), result.code, result=result, kind='ideal_buy')
+        stop = self._extract_price_token(sniper.get('stop_loss'), result.code, result=result, kind='stop_loss')
+        target = self._extract_price_token(sniper.get('take_profit'), result.code, result=result, kind='take_profit')
         return f"🎯 **进场 {entry}** | 🛑 **止损 {stop}** | 🎯 **目标 {target}**"
 
     def _format_position_line(self, result: AnalysisResult) -> str:
@@ -786,8 +915,10 @@ class NotificationService:
         if not conclusion:
             conclusion = "信息不足，暂以技术面跟踪。"
 
+        title_prefix = "市场观察 | " if self._get_result_group(result) == "market_watch" else ""
+
         lines = [
-            f"## {signal_emoji} {stock_name} ({result.code})",
+            f"## {signal_emoji} {title_prefix}{stock_name} ({result.code})",
             f"信号：{signal_text} | 结论：{conclusion}",
             self._build_reason_line(result),
             self._format_risk_line(result),
@@ -804,12 +935,46 @@ class NotificationService:
 
         return "\n".join(lines)
 
+    def _summarize_group(self, label: str, results: List[AnalysisResult]) -> str:
+        """生成首页分组摘要"""
+        if not results:
+            return f"{label}：暂无结果"
+
+        avg_score = sum(r.sentiment_score for r in results) / len(results)
+        buy_count = sum(1 for r in results if r.operation_advice in ['买入', '加仓', '强烈买入'])
+        sell_count = sum(1 for r in results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
+        watch_count = len(results) - buy_count - sell_count
+        leaders = " / ".join(r.code for r in sorted(results, key=lambda x: x.sentiment_score, reverse=True)[:2])
+
+        if avg_score >= 70:
+            tone = "偏强"
+        elif avg_score >= 58:
+            tone = "偏多"
+        elif avg_score >= 45:
+            tone = "分化"
+        else:
+            tone = "偏弱"
+
+        return (
+            f"{label}：{tone} | 🟢{buy_count} 🟡{watch_count} 🔴{sell_count}"
+            f" | 关注 {leaders}"
+        )
+
+    def _order_results_for_telegram(self, results: List[AnalysisResult]) -> List[AnalysisResult]:
+        """Telegram 优先展示 Mag7，再展示大盘观察，组内按评分排序"""
+        grouped = self._split_results_by_group(results)
+        ordered: List[AnalysisResult] = []
+        for key in ("mag7", "market_watch", "other"):
+            ordered.extend(sorted(grouped[key], key=lambda x: x.sentiment_score, reverse=True))
+        return ordered
+
     def _build_market_overview(self, results: List[AnalysisResult], report_date: str) -> List[str]:
         """生成 Mag7 总览头部"""
         if not results:
-            return [f"# 📊 {report_date} Mag7 行动仪表板", "", "暂无可用结果。", ""]
+            return [f"# 📊 {report_date} Mag7 + 大盘观察", "", "暂无可用结果。", ""]
 
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        sorted_results = self._order_results_for_telegram(results)
+        grouped = self._split_results_by_group(sorted_results)
         buy_count = sum(1 for r in results if r.operation_advice in ['买入', '加仓', '强烈买入'])
         sell_count = sum(1 for r in results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
         hold_count = len(results) - buy_count - sell_count
@@ -853,16 +1018,21 @@ class NotificationService:
         leaders = " / ".join(r.code for r in sorted_results[:2])
         laggards = " / ".join(r.code for r in sorted(results, key=lambda x: x.sentiment_score)[:2])
 
-        return [
-            f"# 📊 {report_date} Mag7 行动仪表板",
+        lines = [
+            f"# 📊 {report_date} Mag7 + 大盘观察",
             "",
             f"总体信号：**{overall_signal}** | 板块共振：**{sector_resonance}** | 风险等级：**{risk_level}**",
             f"分布：🟢 {buy_count} | 🟡 {hold_count} | 🔴 {sell_count} | 均分 {avg_score:.0f}",
             f"关注方向：强势看 {leaders}；承压看 {laggards}",
-            "",
-            "---",
-            "",
         ]
+
+        if grouped["mag7"]:
+            lines.append(self._summarize_group("Mag7总结", grouped["mag7"]))
+        if grouped["market_watch"]:
+            lines.append(self._summarize_group("大盘观察", grouped["market_watch"]))
+
+        lines.extend(["", "---", ""])
+        return lines
     
     def generate_dashboard_report(
         self,
@@ -884,7 +1054,7 @@ class NotificationService:
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
 
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        sorted_results = self._order_results_for_telegram(results)
         report_lines = self._build_market_overview(sorted_results, report_date)
 
         for idx, result in enumerate(sorted_results):
@@ -916,22 +1086,26 @@ class NotificationService:
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
 
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        sorted_results = self._order_results_for_telegram(results)
         lines = self._build_market_overview(sorted_results, report_date)
         while lines and lines[-1] in ("", "---"):
             lines.pop()
 
         if sorted_results:
-            lines.extend([
-                "",
-                "目录索引：",
-            ])
-            for idx, result in enumerate(sorted_results, start=1):
-                signal_text, signal_emoji, _ = self._get_cn_signal_level(result)
-                stock_name = self._get_stock_display_name(result)
-                lines.append(
-                    f"{idx}. {signal_emoji} {result.code} {stock_name} | {signal_text}"
-                )
+            grouped = self._split_results_by_group(sorted_results)
+            lines.extend(["", "目录索引："])
+
+            idx = 1
+            for section_title, key in [("Mag7", "mag7"), ("大盘观察", "market_watch"), ("其他", "other")]:
+                group_results = grouped[key]
+                if not group_results:
+                    continue
+                lines.append(f"{section_title}：")
+                for result in group_results:
+                    signal_text, signal_emoji, _ = self._get_cn_signal_level(result)
+                    stock_name = self._get_stock_display_name(result)
+                    lines.append(f"{idx}. {signal_emoji} {result.code} {stock_name} | {signal_text}")
+                    idx += 1
 
         return "\n".join(lines).strip()
 

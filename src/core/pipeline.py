@@ -62,7 +62,7 @@ class StockAnalysisPipeline:
         # 初始化各模块
         self.db = get_db()
         self.fetcher_manager = DataFetcherManager()
-        # 不再单独创建 akshare_fetcher，统一使用 fetcher_manager 获取增强数据
+        # 数据获取统一交给 fetcher_manager（当前为美股主路径）
         self.trend_analyzer = StockTrendAnalyzer()  # 趋势分析器
         self.analyzer = GeminiAnalyzer()
         self.notifier = NotificationService(source_message=source_message)
@@ -470,7 +470,7 @@ class StockAnalysisPipeline:
         # 使用配置中的股票列表
         if stock_codes is None:
             self.config.refresh_stock_list()
-            stock_codes = self.config.stock_list
+            stock_codes = self.config.get_combined_watchlist()
         
         if not stock_codes:
             logger.error("未配置自选股列表，请在 .env 文件中设置 STOCK_LIST")
@@ -579,6 +579,11 @@ class StockAnalysisPipeline:
             
             # 跳过推送（单股推送模式）
             if skip_push:
+                channels = self.notifier.get_available_channels() if self.notifier.is_available() else []
+                if NotificationChannel.TELEGRAM in channels:
+                    overview = self.notifier.generate_telegram_overview(results)
+                    self.notifier.send_to_telegram(overview)
+                    logger.info("单股推送模式：已补发 Telegram 首页总览")
                 return
             
             # 推送通知

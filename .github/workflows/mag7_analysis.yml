@@ -43,12 +43,14 @@ jobs:
           ENABLE_CHIP_DISTRIBUTION: 'false'
           # 开启大盘复盘 (src/market_analyzer.py 已适配美股逻辑)
           MARKET_REVIEW_ENABLED: 'true'
-          # 开启单股推送 (分析完一只推一只，防止超时)
-          SINGLE_STOCK_NOTIFY: 'true'
-          # 使用完整仪表盘报告格式
-          REPORT_TYPE: 'full'
-          # Mag 7 股票列表 + 三大指数 ETF
-          STOCK_LIST: 'NVDA,AAPL,MSFT,GOOGL,META,AMZN,TSLA,SPY,QQQ,DIA'
+          # Telegram 推荐模式：首页总览 + 每只股票一条
+          SINGLE_STOCK_NOTIFY: 'false'
+          # 使用适合 Telegram 的紧凑报告格式
+          REPORT_TYPE: 'simple'
+          # Mag 7 主列表
+          STOCK_LIST: 'NVDA,AAPL,MSFT,GOOGL,META,AMZN,TSLA'
+          # 大盘观察列表
+          MARKET_WATCHLIST: 'SPY,QQQ,DIA'
           
           # ==========================================
           # AI 配置 (Gemini / OpenAI)
@@ -80,6 +82,7 @@ jobs:
           echo "🚀 Mag 7 美股分析 (MVP Mode)"
           echo "=========================================="
           echo "📊 股票列表: $STOCK_LIST"
+          echo "🌍 大盘观察: $MARKET_WATCHLIST"
           echo "🤖 AI 模型: ${GEMINI_MODEL:-Try OpenAI}"
           echo ""
           
