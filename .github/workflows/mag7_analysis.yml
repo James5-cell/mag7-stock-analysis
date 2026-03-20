@@ -2,8 +2,8 @@ name: 美股 Mag7 日报 (精简版)
 
 on:
   # 定时触发 - 每天北京时间 07:00 (美股收盘后) -> UTC 23:00 (前一天)
-  schedule:
-    - cron: '0 23 * * 1-5'
+  # schedule:
+  # - cron: '0 23 * * 1-5'
   
   # 手动触发
   workflow_dispatch:
